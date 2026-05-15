@@ -5,6 +5,8 @@ Telegram Bot 集成
 - 群聊必须 @bot 或回复 bot 消息才触发（静默忽略其他消息）
 - 支持 /setid、/resetid、/whoami 命令
 """
+import sys
+
 import asyncio
 import json
 import logging
@@ -336,7 +338,8 @@ async def _do_reply(msg, user_id: str, user_text: str, bot, context: ContextType
 def build_bot_app(agent: Union[CustomerServiceAgent, IntentClassifier]):
     """构建 Telegram Application，注入 agent"""
     if not TELEGRAM_BOT_TOKEN:
-        raise ValueError("TELEGRAM_BOT_TOKEN 未配置，请在 .env 中设置")
+        logger.warning("TELEGRAM_BOT_TOKEN 未配置，跳过 Bot 启动")
+        return None
 
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
@@ -395,6 +398,10 @@ if __name__ == "__main__":
     _logger.info("IntentClassifier + KnowledgeAgent 初始化完成")
 
     app = build_bot_app(_agent)
+    if app is None:
+        _logger.info("未配置 TELEGRAM_BOT_TOKEN，Bot 未启动（可忽略）")
+        loop.close()
+        sys.exit(0)
     app.bot_data["knowledge_agent"] = _knowledge_agent
     _logger.info("[Telegram] Bot 开始轮询...")
     try:

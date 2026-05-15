@@ -6,12 +6,13 @@ FastAPI 后端接口
 - POST /chat           - 普通对话
 - GET  /chat/stream    - SSE 流式对话
 - POST /knowledge/add  - 上传文本到知识库
+- POST /knowledge/search-and-add - 搜索关键词并导入知识库
 - POST /knowledge/file - 上传文件到知识库
 - GET  /knowledge/list - 查看知识库来源列表
 - DELETE /knowledge/{source} - 删除知识库来源
 - GET  /memory/{user_id}     - 查看用户记忆
 - DELETE /memory/{user_id}   - 清除用户记忆
-- GET  /health         - 健康检查
+- GET /health         - 健康检查
 - Telegram Bot（后台轮询，每个群对应一个 user_id）
 """
 import logging
@@ -20,7 +21,9 @@ import signal
 import tempfile
 import threading
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Optional, Any
+import httpx
+from bs4 import BeautifulSoup
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
@@ -144,6 +147,153 @@ class AddTextRequest(BaseModel):
     text: str = Field(..., min_length=1, description="知识内容")
     source: str = Field(default="手动录入", description="来源标识")
     category: str = Field(default="通用", description="分类")
+
+
+class SearchAndAddRequest(BaseModel):
+    """搜索并导入知识库请求"""
+    keyword: str = Field(..., min_length=1, max_length=200, description="搜索关键词")
+    max_results: int = Field(default=3, ge=1, le=10, description="最多处理结果数")
+    category: str = Field(default="通用", description="知识分类")
+
+
+async def search_and_fetch_content(keyword: str, max_results: int = 3) -> list[dict]:
+    """
+    搜索关键词并抓取内容
+    返回 [{"title": ..., "content": ..., "url": ...}, ...]
+    """
+    results = []
+    
+    try:
+        # 1. 尝试 DuckDuckGo Instant Answer API
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            ddg_resp = await client.get(
+                "https://api.duckduckgo.com/",
+                params={
+                    "q": keyword,
+                    "format": "json",
+                    "no_html": "1",
+                    "skip_disambig": "1",
+                },
+            )
+            ddg_data = ddg_resp.json()
+
+            # 如果有 AbstractText（即时答案），直接使用
+            if ddg_data.get("AbstractText"):
+                results.append({
+                    "title": ddg_data.get("Heading", keyword),
+                    "content": ddg_data["AbstractText"],
+                    "url": ddg_data.get("AbstractURL", ""),
+                    "source_type": "instant_answer",
+                })
+
+            # 如果有 RelatedTopics，也加入
+            for topic in (ddg_data.get("RelatedTopics") or [])[:max_results]:
+                if isinstance(topic, dict) and topic.get("Text"):
+                    results.append({
+                        "title": topic.get("Text", "")[:100],
+                        "content": topic["Text"],
+                        "url": (topic.get("FirstURL") or ""),
+                        "source_type": "related_topic",
+                    })
+
+            # 如果即时答案不够，用 HTML 搜索补充
+            if len(results) < max_results:
+                # 使用 DuckDuckGo HTML 搜索获取更多结果
+                html_resp = await client.get(
+                    "https://html.duckduckgo.com/html/",
+                    params={"q": keyword},
+                    headers={"User-Agent": "Mozilla/5.0"},
+                )
+                soup = BeautifulSoup(html_resp.text, "html.parser")
+                
+                # 提取搜索结果链接
+                for result_div in soup.select(".result__body")[:max_results - len(results)]:
+                    title_elem = result_div.select_one(".result__a")
+                    snippet_elem = result_div.select_one(".result__snippet")
+                    
+                    if title_elem:
+                        url = title_elem.get("href", "")
+                        title = title_elem.get_text(strip=True)
+                        snippet = snippet_elem.get_text(strip=True) if snippet_elem else ""
+                        
+                        if url and title:
+                            results.append({
+                                "title": title,
+                                "content": f"{title}\n\n{snippet}",
+                                "url": url,
+                                "source_type": "web_search",
+                            })
+
+    except Exception as e:
+        logger.error(f"搜索失败: {e}")
+
+    return results[:max_results]
+
+
+@app.post("/knowledge/search-and-add", tags=["知识库"])
+async def search_and_add_knowledge(req: SearchAndAddRequest):
+    """
+    搜索关键词并导入知识库
+    1. 使用 DuckDuckGo 搜索关键词
+    2. 抓取搜索结果内容
+    3. 整理后导入知识库
+    """
+    if not kb:
+        raise HTTPException(status_code=503, detail="服务初始化中")
+
+    try:
+        # 搜索并抓取内容
+        search_results = await search_and_fetch_content(req.keyword, req.max_results)
+
+        if not search_results:
+            raise HTTPException(status_code=404, detail=f"未找到关键词「{req.keyword}」的相关内容")
+
+        # 整理并导入知识库
+        added = []
+        for item in search_results:
+            content = item["content"]
+            if not content or len(content.strip()) < 50:
+                continue
+
+            # 限制单条内容长度（避免超大文本）
+            if len(content) > 5000:
+                content = content[:5000] + "...(内容过长已截断)"
+
+            source = f"搜索:{req.keyword}"
+            if item["url"]:
+                source += f" ({item['url'][:100]})"
+
+            ids = kb.add_text(
+                content,
+                metadata={
+                    "source": source,
+                    "category": req.category,
+                    "keyword": req.keyword,
+                    "url": item.get("url", ""),
+                    "title": item.get("title", ""),
+                    "source_type": item.get("source_type", "unknown"),
+                },
+            )
+            added.append({
+                "title": item["title"],
+                "url": item.get("url", ""),
+                "chunk_count": len(ids),
+                "ids": ids,
+            })
+
+        return {
+            "success": True,
+            "keyword": req.keyword,
+            "search_results_count": len(search_results),
+            "imported_count": len(added),
+            "imported": added,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"搜索并导入失败: {e}")
+        raise HTTPException(status_code=500, detail=f"搜索并导入失败：{str(e)}")
 
 
 # ====================== 对话接口 ======================

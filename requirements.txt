@@ -23,3 +23,6 @@ python-telegram-bot>=21.0
 pydantic>=2.0.0
 httpx>=0.27.0
 python-multipart>=0.0.9
+# Web search & scraping (for /knowledge/search-and-add)
+beautifulsoup4>=4.12.0
+requests>=2.31.0
