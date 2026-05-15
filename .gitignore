@@ -30,6 +30,10 @@ data/
 
 # 日志
 *.log
+logs/
+
+# 运行时 PID 文件
+.pids/
 
 # 测试
 .pytest_cache/
