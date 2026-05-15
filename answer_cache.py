@@ -31,10 +31,16 @@ CACHE_COLLECTION = "answer_cache"
 
 # 缓存过期时间（秒），默认 1 小时
 CACHE_TTL = int(__import__("os").getenv("CACHE_TTL", "3600"))
+if CACHE_TTL < 60:
+    CACHE_TTL = 60
+    logger.warning(f"CACHE_TTL 过小（<60s），已自动修正为 60s")
 
 # 语义匹配阈值（余弦相似度），0.0~1.0，越高越严格
 # 0.92 = 非常相似才命中，避免误缓存
 CACHE_SEMANTIC_THRESHOLD = float(__import__("os").getenv("CACHE_SEMANTIC_THRESHOLD", "0.92"))
+if not 0 < CACHE_SEMANTIC_THRESHOLD <= 1.0:
+    CACHE_SEMANTIC_THRESHOLD = 0.92
+    logger.warning(f"CACHE_SEMANTIC_THRESHOLD 超出合理范围（0~1），已自动修正为 0.92")
 
 # 缓存命中统计
 _cache_stats = {

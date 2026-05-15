@@ -65,6 +65,18 @@ def check_startup() -> list[str]:
     except ImportError:
         warnings.append("mem0ai 未安装，请运行: pip install mem0ai")
 
+    # 4. 阈值参数合理范围校验
+    if not 0 < RAG_SCORE_THRESHOLD <= 1.0:
+        warnings.append(
+            f"RAG_SCORE_THRESHOLD={RAG_SCORE_THRESHOLD} 超出合理范围 (0~1)，"
+            "请检查 .env 文件。"
+        )
+    if not 0 < MEM0_SCORE_THRESHOLD <= 1.0:
+        warnings.append(
+            f"MEM0_SCORE_THRESHOLD={MEM0_SCORE_THRESHOLD} 超出合理范围 (0~1)，"
+            "请检查 .env 文件。"
+        )
+
     return warnings
 
 

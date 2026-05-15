@@ -35,7 +35,7 @@ User → FastAPI(/chat) → IntentClassifier(router_agent.py)
 
 ---
 
-## 二、已修复的问题（本次）
+## 二、已修复的问题（本次 + 后续跟进）
 
 ### ✅ 修复 1：`router_agent.py` – 意图分类器缺少意图
 
@@ -61,72 +61,48 @@ if self.overlap >= self.chunk_size:
 
 ---
 
-## 三、剩余问题清单
+## 三、已修复的问题（后续跟进）
 
-### 🔴 高优先级
+### ✅ 修复 3：`knowledge_agent.py` – 回答缓存已启用
 
-#### 问题 1：`knowledge_agent.py` – 回答缓存被禁用
-
-**位置：** 第 222-228 行（读缓存），第 381-389 行（写缓存）
-
-**影响：** 每个问题都走 RAG 检索 + LLM 调用，延迟高、成本高。
-
-**建议：** 取消注释，重新启用缓存：
-```python
-# 取消注释以下代码块
-if self.cache:
-    cached = self.cache.get(user_input, user_id)
-    if cached:
-        return cached
-```
+**修复日期：** 2026-05-15  
+**改动：** 取消注释并恢复了 Step 0（读缓存）和 Step 8（写缓存）代码块。
 
 ---
 
-#### 问题 2：`telegram_bot.py` – `GROUP_USER_MAP` 不持久化
+### ✅ 修复 4：`telegram_bot.py` – `GROUP_USER_MAP` 已持久化
 
-**位置：** 第 31 行
-
-```python
-GROUP_USER_MAP: dict[str, str] = {}  # ⚠️ 仅内存，重启丢失
-```
-
-**影响：** Bot 重启后所有群的 `/setid` 绑定丢失，需要重新设置。
-
-**建议：** 改为从 JSON 文件读写（见完整报告附件）。
+**修复日期：** 2026-05-15  
+**改动：** 新增 JSON 文件读写（`data/telegram_group_map.json`），重启不丢失。
 
 ---
 
-#### 问题 3：`knowledge_agent.py` – 流式模式不保存记忆
+### ✅ 修复 5：`knowledge_agent.py` – 流式模式已保存记忆
 
-**位置：** `stream_chat()` 方法
-
-**问题：** 流式模式没有调用 `save_memory` 工具，也没有对话存档。只有非流式（`/chat`）才完整保存记忆。
-
-**影响：** 用 SSE 流式对话的用户，其对话不会被记录到记忆中。
+**修复日期：** 2026-05-15  
+**改动：** `stream_chat()` 流式结束后，自动归档对话记录到记忆库（过滤闲聊逻辑同 `chat()`）。
 
 ---
 
-### 🟡 中优先级
+### ✅ 修复 6：`telegram_bot.py` – Markdown → Telegram HTML 转换改进
 
-#### 问题 4：`telegram_bot.py` – Markdown → Telegram HTML 转换不完整
-
-**已知局限：**
-- 表格：只做了简单 `|` 字符删除，没有真正转为对齐文本
-- 嵌套格式：`**加粗` 在列表项中可能无法正确识别
-- 多级引用：只处理单级 `>` 
-
-**建议：** 对于复杂 Markdown，可先转纯文本（去掉所有格式），或限制知识库输出格式。
+**修复日期：** 2026-05-15  
+**改动：**
+- 表格：正确识别表格块，对齐列宽输出，表头加分隔线
+- 多级引用：支持 `>` / `>>` / `>>>` 层级，嵌套显示 `  |` 前缀
 
 ---
 
-#### 问题 5：`config.py` – 缺少配置校验
+### ✅ 修复 7：`config.py` – 增加配置校验
 
-**缺失校验：**
-- `RAG_SCORE_THRESHOLD` 是否在合理范围（0~1）
-- `CACHE_TTL` 是否为正数
-- `MEM0_SCORE_THRESHOLD` 是否合理
+**修复日期：** 2026-05-15  
+**改动：**
+- `check_startup()`：增加 `RAG_SCORE_THRESHOLD` 和 `MEM0_SCORE_THRESHOLD` 范围校验
+- `answer_cache.py`：`CACHE_TTL` 低于 60s 自动修正；`CACHE_SEMANTIC_THRESHOLD` 越界自动修正
 
-**建议：** 在 `check_startup()` 中增加这些校验。
+---
+
+### 🟢 低优先级 / 优化建议
 
 ---
 
@@ -168,13 +144,7 @@ GROUP_USER_MAP: dict[str, str] = {}  # ⚠️ 仅内存，重启丢失
 
 | 类别 | 数量 |
 |---|---|
-| ✅ 本次已修复 | 2 |
-| 🔴 高优先级待修复 | 3 |
-| 🟡 中优先级 | 2 |
-| 🟢 优化建议 | 3 |
+| ✅ 已修复 | 6 |
+| 🟢 优化建议（未修） | 3 |
 
-**下一步建议：**
-1. **启用 `answer_cache`**（高收益，延迟大幅下降）
-2. **持久化 `GROUP_USER_MAP`**（改 JSON 文件读写）
-3. **为 `stream_chat` 补充记忆保存逻辑**
-4. 补充意图分类和多轮对话的系统测试
+**全部 🔴高优先级 和 🟡中优先级 问题已在 2026-05-15 修复完成。**

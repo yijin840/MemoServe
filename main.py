@@ -277,7 +277,7 @@ async def search_and_add_knowledge(req: SearchAndAddRequest):
     搜索关键词并导入知识库
     1. 使用 DuckDuckGo 搜索关键词
     2. 抓取搜索结果内容
-    3. 整理后导入知识库
+    3. 合并为一条知识库条目，标题格式：[时间戳]_[关键词]
     """
     if not kb:
         raise HTTPException(status_code=503, detail="服务初始化中")
@@ -289,9 +289,9 @@ async def search_and_add_knowledge(req: SearchAndAddRequest):
         if not search_results:
             raise HTTPException(status_code=404, detail=f"未找到关键词「{req.keyword}」的相关内容")
 
-        # 整理并导入知识库
-        added = []
-        for item in search_results:
+        # 合并所有搜索结果为一条文档
+        merged_parts = []
+        for i, item in enumerate(search_results):
             content = item["content"]
             if not content or len(content.strip()) < 50:
                 continue
@@ -300,33 +300,42 @@ async def search_and_add_knowledge(req: SearchAndAddRequest):
             if len(content) > 5000:
                 content = content[:5000] + "...(内容过长已截断)"
 
-            title = (item.get("title") or req.keyword)[:30]
-            source = f"搜索:{title}"
-
-            ids = kb.add_text(
-                content,
-                metadata={
-                    "source": source,
-                    "category": req.category,
-                    "keyword": req.keyword,
-                    "url": item.get("url", ""),
-                    "title": item.get("title", ""),
-                    "source_type": item.get("source_type", "unknown"),
-                },
+            title = item.get("title") or req.keyword
+            url = item.get("url", "")
+            source_type = item.get("source_type", "unknown")
+            merged_parts.append(
+                f"## {i+1}. {title}\n\n"
+                f"{content}\n\n"
+                f"> 来源: {url}  |  类型: {source_type}\n\n"
+                f"---\n"
             )
-            added.append({
-                "title": item["title"],
-                "url": item.get("url", ""),
-                "chunk_count": len(ids),
-                "ids": ids,
-            })
+
+        if not merged_parts:
+            raise HTTPException(status_code=404, detail=f"未找到关键词「{req.keyword}」的相关内容")
+
+        merged_content = "\n".join(merged_parts)
+
+        # 标题 = 时间戳(精确到秒) + "_" + 关键词
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        source_name = f"{timestamp}_{req.keyword}"
+
+        ids = kb.add_text(
+            merged_content,
+            metadata={
+                "source": source_name,
+                "category": req.category,
+                "keyword": req.keyword,
+            },
+        )
 
         return {
             "success": True,
             "keyword": req.keyword,
+            "source": source_name,
             "search_results_count": len(search_results),
-            "imported_count": len(added),
-            "imported": added,
+            "chunk_count": len(ids),
+            "ids": ids,
         }
 
     except HTTPException:

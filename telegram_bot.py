@@ -111,14 +111,37 @@ def markdown_to_telegram_html(text: str) -> str:
     # 链接：[text](url) → <a href="url">text</a>
     text = re.sub(r"\[([^\]]+)\]\(([^\)]+)\)", r'<a href="\2">\1</a>', text)
 
-    # 引用块：> text → <i>text</i>（简单处理，逐行）
-    text = re.sub(r"^>\s?(.*)$", r"<i>\1</i>", text, flags=re.MULTILINE)
+    # 引用块：> text / >> text → <i>...</i> / <i>  |  ...</i>（逐行，支持多级）
+    text = re.sub(r"^>{1,3}\s+(.*)$", lambda m: f"<i>{'  |  '*(m.group(0).count('>')-1)}{m.group(1)}</i>", text, flags=re.MULTILINE)
 
-    # 表格：简单转换（Telegram HTML 不支持表格，转换为纯文本对齐格式）
-    # 删除表格分隔行（|---|---|）
-    text = re.sub(r"^\|?[\s\-|]+\|?$", "", text, flags=re.MULTILINE)
-    # 简单表格行：| col1 | col2 | → col1   col2
-    text = re.sub(r"\|([^\|]+)\|", r"\1   ", text)
+    # 表格：Telegram HTML 不支持表格，转换为对齐纯文本
+    # 用占位符保护表格块（连续 | 行），一次性转换
+    def _convert_table(m):
+        lines = m.group(0).strip().split("\n")
+        # 分离表头、分隔行、数据行
+        rows = [line.strip().strip("|") for line in lines if not re.match(r"^\|?[\s\-:|]+\|?$", line)]
+        if not rows:
+            return ""
+        # 分割单元格
+        cells = [[c.strip() for c in row.split("|")] for row in rows]
+        if not cells:
+            return ""
+        # 每列最大宽度
+        col_widths = [max(len(cells[r][c]) for r in range(len(cells))) for c in range(len(cells[0]))]
+        # 格式化输出：每个单元格用空格填充到列宽，列间 2 个空格
+        formatted = []
+        for r, row in enumerate(cells):
+            padded = []
+            for c, cell in enumerate(row):
+                if c < len(col_widths):
+                    padded.append(cell.ljust(col_widths[c]))
+            formatted.append("  ".join(padded))
+            # 表头下方加分隔线
+            if r == 0:
+                formatted.append("  ".join(["─" * w for w in col_widths]))
+        return "\n" + "\n".join(formatted) + "\n"
+    # 匹配表格块（连续 | 开头的行）
+    text = re.sub(r"(?:\|.+\|\n?)+", _convert_table, text)
 
     # 转义 Telegram HTML 需要的特殊字符（在标签外的内容中）
     # 注意：标签内的内容已经处理好，这里只处理普通文本中的 < > &

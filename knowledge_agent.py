@@ -219,13 +219,11 @@ class CustomerServiceAgent:
         conversation_history = conversation_history or []
 
         # ★ Step 0: 查询问答缓存（命中直接返回，跳过 RAG + LLM）
-        # ⚠️ 缓存已临时禁用（用于无缓存测试），如需启用请取消下方注释
-        # if self.cache:
-        #     cached = self.cache.get(user_input, user_id)
-        #     if cached:
-        #         logger.info(f"[缓存] 命中，跳过 RAG + LLM | query='{user_input[:40]}'")
-        #         return cached
-        logger.debug(f"[缓存已禁用] 跳过缓存查询 | query='{user_input[:40]}'")
+        if self.cache:
+            cached = self.cache.get(user_input, user_id)
+            if cached:
+                logger.info(f"[缓存] 命中，跳过 RAG + LLM | query='{user_input[:40]}'")
+                return cached
 
         # Step 1+2: 并行检索记忆和 RAG
         _t1 = _t.time()
@@ -378,14 +376,13 @@ class CustomerServiceAgent:
         }
 
         # ★ Step 8: 写入问答缓存（仅对知识库命中的正常回答缓存）
-        # ⚠️ 缓存已临时禁用（用于无缓存测试），如需启用请取消下方注释
-        # if self.cache and rag_results and rag_results[0]["score"] >= RAG_SCORE_THRESHOLD:
-        #     self.cache.set(
-        #         query=user_input,
-        #         answer=answer,
-        #         rag_sources=result["rag_sources"],
-        #         user_id=user_id,
-        #     )
+        if self.cache and rag_results and rag_results[0]["score"] >= RAG_SCORE_THRESHOLD:
+            self.cache.set(
+                query=user_input,
+                answer=answer,
+                rag_sources=result["rag_sources"],
+                user_id=user_id,
+            )
 
         return result
 
@@ -397,7 +394,8 @@ class CustomerServiceAgent:
     ) -> AsyncIterator[str]:
         """
         流式对话（异步，SSE 使用）
-        - 流式模式暂不支持工具调用，记忆由 /chat 接口的 LLM 自主保存
+        - 流式模式暂不支持工具调用（LLM 无法主动调用 save_memory）
+        - 流式结束后会自动归档对话记录到记忆库
         """
         import time as _t
         conversation_history = conversation_history or []
@@ -438,6 +436,34 @@ class CustomerServiceAgent:
                 if delta:
                     full_answer += delta
                     yield delta
+
+        # 流式结束后：归档对话（同 chat() 一致）
+        if self._should_archive(user_input, full_answer):
+            import time as _time
+            ts = _time.strftime("%Y-%m-%d %H:%M", _time.localtime())
+            conv_text = (
+                f"【{ts}】\n"
+                f"用户：{user_input}\n"
+                f"助手：{full_answer[:300]}"
+                + ("..." if len(full_answer) > 300 else "")
+            )
+            try:
+                self.mm.add_memory_direct(
+                    content=conv_text,
+                    user_id=user_id,
+                    category="对话记录",
+                )
+                logger.info(f"[流式-对话存档] 已保存用户 {user_id} 的对话")
+            except Exception as e:
+                logger.warning(f"[流式-对话存档失败] {e}")
+        else:
+            logger.debug(f"[流式-对话存档] 跳过（闲聊或内容过短）：{user_input[:30]}")
+        _st3 = _t.time()
+        logger.info(
+            f"[流式性能] query='{user_input[:30]}' | "
+            f"检索={(_st2-_st1)*1000:.0f}ms | "
+            f"总计={(_st3-_st1)*1000:.0f}ms"
+        )
 
 
 # 别名：多 Agent 架构中作为子 Agent 使用
