@@ -160,13 +160,40 @@ class SearchAndAddRequest(BaseModel):
     category: str = Field(default="通用", description="知识分类")
 
 
+def _check_search_relevance(keyword: str, title: str, content: str) -> bool:
+    """
+    检查搜索结果与关键词的相关性。
+    简单的关键词匹配：提取关键词中的核心词汇（2+字符），
+    要求标题或内容中至少包含一个核心词。
+    """
+    import re
+
+    # 提取核心词汇（中英文，长度>=2）
+    # 中文按字切，英文按词切
+    kw = keyword.lower()
+    # 中文提取连续中文字符（长度>=2）
+    chinese_words = re.findall(r'[\u4e00-\u9fff]{2,}', kw)
+    # 英文/数字提取连续单词（长度>=2）
+    english_words = re.findall(r'[a-z0-9]{2,}', kw)
+    core_words = chinese_words + english_words
+
+    if not core_words:
+        # 关键词太短，无法提取核心词，直接放行
+        return True
+
+    text = (title + " " + content).lower()
+    matched = [w for w in core_words if w in text]
+    # 要求至少命中一个核心词
+    return len(matched) > 0
+
+
 async def search_and_fetch_content(keyword: str, max_results: int = 3) -> list[dict]:
     """
-    搜索关键词并抓取内容
+    搜索关键词并抓取内容，自动过滤不相关结果
     返回 [{"title": ..., "content": ..., "url": ...}, ...]
     """
-    results = []
-    
+    raw_results = []
+
     try:
         # 1. 尝试 DuckDuckGo Instant Answer API
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -183,7 +210,7 @@ async def search_and_fetch_content(keyword: str, max_results: int = 3) -> list[d
 
             # 如果有 AbstractText（即时答案），直接使用
             if ddg_data.get("AbstractText"):
-                results.append({
+                raw_results.append({
                     "title": ddg_data.get("Heading", keyword),
                     "content": ddg_data["AbstractText"],
                     "url": ddg_data.get("AbstractURL", ""),
@@ -191,9 +218,9 @@ async def search_and_fetch_content(keyword: str, max_results: int = 3) -> list[d
                 })
 
             # 如果有 RelatedTopics，也加入
-            for topic in (ddg_data.get("RelatedTopics") or [])[:max_results]:
+            for topic in (ddg_data.get("RelatedTopics") or [])[:max_results * 2]:
                 if isinstance(topic, dict) and topic.get("Text"):
-                    results.append({
+                    raw_results.append({
                         "title": topic.get("Text", "")[:100],
                         "content": topic["Text"],
                         "url": (topic.get("FirstURL") or ""),
@@ -201,7 +228,7 @@ async def search_and_fetch_content(keyword: str, max_results: int = 3) -> list[d
                     })
 
             # 如果即时答案不够，用 HTML 搜索补充
-            if len(results) < max_results:
+            if len(raw_results) < max_results:
                 # 使用 DuckDuckGo HTML 搜索获取更多结果
                 html_resp = await client.get(
                     "https://html.duckduckgo.com/html/",
@@ -209,19 +236,19 @@ async def search_and_fetch_content(keyword: str, max_results: int = 3) -> list[d
                     headers={"User-Agent": "Mozilla/5.0"},
                 )
                 soup = BeautifulSoup(html_resp.text, "html.parser")
-                
+
                 # 提取搜索结果链接
-                for result_div in soup.select(".result__body")[:max_results - len(results)]:
+                for result_div in soup.select(".result__body")[:max_results * 2]:
                     title_elem = result_div.select_one(".result__a")
                     snippet_elem = result_div.select_one(".result__snippet")
-                    
+
                     if title_elem:
                         url = title_elem.get("href", "")
                         title = title_elem.get_text(strip=True)
                         snippet = snippet_elem.get_text(strip=True) if snippet_elem else ""
-                        
+
                         if url and title:
-                            results.append({
+                            raw_results.append({
                                 "title": title,
                                 "content": f"{title}\n\n{snippet}",
                                 "url": url,
@@ -230,6 +257,16 @@ async def search_and_fetch_content(keyword: str, max_results: int = 3) -> list[d
 
     except Exception as e:
         logger.error(f"搜索失败: {e}")
+
+    # 过滤不相关结果
+    results = []
+    for item in raw_results:
+        title = item.get("title", "")
+        content = item.get("content", "")
+        if _check_search_relevance(keyword, title, content):
+            results.append(item)
+        else:
+            logger.warning(f"[搜索过滤] 丢弃不相关结果：{title[:60]}... (keyword={keyword})")
 
     return results[:max_results]
 
