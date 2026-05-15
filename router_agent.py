@@ -158,8 +158,17 @@ class IntentClassifier:
         if intents == ["greeting"]:
             return self.handle_greeting()
 
-        # 纯未知
+        # 纯未知 → 不再直接拒绝，先走 RAG 搜索（让 KnowledgeAgent 判断知识库是否有相关内容）
         if intents == ["unknown"]:
+            if knowledge_agent:
+                agent_result = knowledge_agent.chat(
+                    user_input=user_input,
+                    user_id=user_id,
+                    conversation_history=conversation_history,
+                    update_memory=update_memory,
+                )
+                agent_result["intents"] = intents
+                return agent_result
             return self.handle_unknown()
 
         # 多意图拆分
@@ -219,8 +228,16 @@ class IntentClassifier:
                 yield resp[i:i + 5]
             return
 
-        # 纯未知 → 模拟流式输出
+        # 纯未知 → 同样走 knowledge_agent 的 RAG 搜索
         if intents == ["unknown"]:
+            if knowledge_agent:
+                async for chunk in knowledge_agent.stream_chat(
+                    user_input=user_input,
+                    user_id=user_id,
+                    conversation_history=conversation_history,
+                ):
+                    yield chunk
+                return
             resp = self.handle_unknown()["answer"]
             for i in range(0, len(resp), 5):
                 yield resp[i:i + 5]

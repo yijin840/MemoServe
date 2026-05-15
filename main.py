@@ -666,6 +666,9 @@ async def delete_knowledge(source_name: str = Query(..., description="来源名�
     if not kb:
         raise HTTPException(status_code=503, detail="服务初始化中")
     deleted = kb.delete_by_source(source_name)
+    # 知识库变动 → 清空缓存，防止旧回答被命中
+    if cache:
+        cache.invalidate()
     return {"success": True, "deleted_chunks": deleted}
 
 

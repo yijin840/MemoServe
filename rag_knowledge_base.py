@@ -62,8 +62,24 @@ class QwenEmbedding:
         return self.embed([text])[0]
 
 
+import re
+
+
 class TextSplitter:
-    """简单文本分块器"""
+    """
+    智能文本分块器
+    - 优先按段落（\n\n）分块
+    - 段落过长时按句子边界（。！？.!?）分块
+    - 确保每个块内容完整（不切在句子中间）
+    - 支持中英文混合文本
+    """
+
+    # 句子结束符：英文句点后跟空格+大写/数字/引号，中文句号/问号/感叹号，以及各种换行
+    _SENTENCE_PATTERN = re.compile(
+        r'[。！？.!?]\s*(?=[\u4e00-\u9fffA-Z0-9"\'（「【])'
+        r'|(?<=\n)\s*(?=\S)'
+        r'|[:：]\s*(?=\n)'
+    )
 
     def __init__(self, chunk_size: int = RAG_CHUNK_SIZE, overlap: int = RAG_CHUNK_OVERLAP):
         self.chunk_size = chunk_size
@@ -74,21 +90,102 @@ class TextSplitter:
                 "否则会导致死循环。请在 .env 中调整 RAG_CHUNK_SIZE 和 RAG_CHUNK_OVERLAP。"
             )
 
+    def _split_sentences(self, text: str) -> list[str]:
+        """将文本拆分为句子列表"""
+        parts = self._SENTENCE_PATTERN.split(text)
+        # 合并过短的片段
+        sentences = []
+        for p in parts:
+            p = p.strip()
+            if not p:
+                continue
+            if sentences and len(p) < 10 and p[-1] not in '。！？.!?\n':
+                sentences[-1] += p
+            else:
+                sentences.append(p)
+        # 合并连续短句（单行列表项等）
+        merged = []
+        for s in sentences:
+            if merged and len(s) < 30 and (s.startswith('- ') or s.startswith('* ') or s[0].islower()):
+                merged[-1] += ' ' + s
+            else:
+                merged.append(s)
+        return [s.strip() for s in merged if s.strip()]
+
     def split(self, text: str) -> list[str]:
-        """按字符数分块，支持中英文"""
+        """
+        按语义边界分块
+        - 优先按段落拆分，再按句子边界组装
+        - 含 overlap 确保上下文连贯
+        """
         text = text.strip()
+        if not text:
+            return []
         if len(text) <= self.chunk_size:
-            return [text] if text else []
+            return [text]
+
+        sentences = self._split_sentences(text)
+        if not sentences:
+            return [text]
 
         chunks = []
-        start = 0
-        while start < len(text):
-            end = start + self.chunk_size
-            chunk = text[start:end]
-            if chunk.strip():
-                chunks.append(chunk.strip())
-            start = end - self.overlap
-        return chunks
+        current_chunk = []
+        current_len = 0
+
+        for sentence in sentences:
+            sentence_len = len(sentence)
+
+            # 如果当前块为空且单句就超长，直接切
+            if not current_chunk and sentence_len > self.chunk_size:
+                # 单句超长，按字符数硬切
+                for i in range(0, sentence_len, self.chunk_size):
+                    chunks.append(sentence[i:i + self.chunk_size].strip())
+                continue
+
+            # 加上这句会超长 → 结算当前块
+            if current_len + sentence_len + 1 > self.chunk_size:
+                if current_chunk:
+                    chunk_text = '\n\n'.join(current_chunk)
+                    if chunk_text.strip():
+                        chunks.append(chunk_text.strip())
+
+                    # overlap: 保留当前块末尾的句子
+                    overlap_sentences = []
+                    overlap_len = 0
+                    for s in reversed(current_chunk):
+                        if overlap_len + len(s) + 1 > self.overlap:
+                            break
+                        overlap_sentences.insert(0, s)
+                        overlap_len += len(s) + 2
+
+                    current_chunk = overlap_sentences
+                    current_len = overlap_len
+
+                # 如果新句子依然太大，直接作为新块
+                if not current_chunk or sentence_len <= self.chunk_size:
+                    current_chunk.append(sentence)
+                    current_len += len(sentence) + 2
+                else:
+                    # 单句超长，硬切
+                    for i in range(0, sentence_len, self.chunk_size):
+                        chunks.append(sentence[i:i + self.chunk_size].strip())
+            else:
+                current_chunk.append(sentence)
+                current_len += len(sentence) + 2
+
+        # 最后一块
+        if current_chunk:
+            chunk_text = '\n\n'.join(current_chunk)
+            if chunk_text.strip():
+                chunks.append(chunk_text.strip())
+
+        # 去重（相邻块完全相同的情况）
+        unique_chunks = []
+        for c in chunks:
+            if not unique_chunks or c != unique_chunks[-1]:
+                unique_chunks.append(c)
+
+        return unique_chunks
 
 
 class KnowledgeBase:

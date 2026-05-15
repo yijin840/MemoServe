@@ -89,7 +89,7 @@ CHROMA_MEMORY_COLLECTION = "mem0_memory"         # mem0 记忆 collection
 RAG_TOP_K = 5           # 检索 Top-K 片段
 RAG_CHUNK_SIZE = 500    # 文本分块大小
 RAG_CHUNK_OVERLAP = 50  # 分块重叠
-RAG_SCORE_THRESHOLD = float(os.getenv("RAG_SCORE_THRESHOLD", "0.4"))  # 最低相关度阈值
+RAG_SCORE_THRESHOLD = float(os.getenv("RAG_SCORE_THRESHOLD", "0.55"))  # 最低相关度阈值
 
 # ====================== mem0 ======================
 MEM0_TOP_K = 5           # 每次检索记忆条数
