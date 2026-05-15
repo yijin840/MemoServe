@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 RAG 知识库模块
 - 使用 ChromaDB 作为向量数据库
@@ -66,6 +68,11 @@ class TextSplitter:
     def __init__(self, chunk_size: int = RAG_CHUNK_SIZE, overlap: int = RAG_CHUNK_OVERLAP):
         self.chunk_size = chunk_size
         self.overlap = overlap
+        if self.overlap >= self.chunk_size:
+            raise ValueError(
+                f"overlap ({self.overlap}) 必须小于 chunk_size ({self.chunk_size})，"
+                "否则会导致死循环。请在 .env 中调整 RAG_CHUNK_SIZE 和 RAG_CHUNK_OVERLAP。"
+            )
 
     def split(self, text: str) -> list[str]:
         """按字符数分块，支持中英文"""

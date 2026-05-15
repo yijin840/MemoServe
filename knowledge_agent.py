@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 知识库 Agent（多 Agent 架构中的子 Agent）
 整合：mem0 记忆 + ChromaDB RAG + Qwen 大模型
@@ -27,10 +29,12 @@ from config import (
     QWEN_MODEL,
     QWEN_BASE_URL,
     RAG_TOP_K,
+    RAG_SCORE_THRESHOLD,
     MEM0_TOP_K,
 )
 from rag_knowledge_base import KnowledgeBase
 from memory_manager import MemoryManager
+from answer_cache import AnswerCache
 
 logger = logging.getLogger(__name__)
 
@@ -55,17 +59,20 @@ PLAINTEXT_FORMAT_INSTRUCTION = (
     "  - 不使用 #、**、`、> 等 Markdown 符号"
 )
 
-SYSTEM_PROMPT_TEMPLATE = """你是一位专业、友善的智能客服助手。
+SYSTEM_PROMPT_TEMPLATE = """你是一位专业、友善的智能客服助手，**严格基于知识库内容回答问题**。
 
-你的能力：
-1. 根据知识库内容准确回答用户问题
-2. 记住用户的偏好和历史问题，提供个性化服务
-3. 对于知识库没有覆盖的问题，诚实告知并提供通用建议
+## 核心约束（必须遵守）
 
-回答原则：
-- 简洁清晰，优先使用知识库中的内容
+1. **只回答知识库中有的内容**：你的回答必须完全基于下方【相关知识库内容】中的信息。
+2. **知识库中没有的内容 → 一律回复不支持**：如果【相关知识库内容】为空，或者用户的问题在知识库中找不到相关依据，你必须直接回复：
+   > 抱歉，您的问题不在我的知识范围内，暂时无法回答。如需进一步帮助，请联系人工客服。
+3. **禁止编造、推测或补充知识库以外的信息**：宁可拒绝回答，也绝不能凭空编造数据、规则或流程。
+
+## 回答原则
+- 简洁清晰，优先使用知识库中的原文或关键数据
 - 如有用户历史记忆，结合记忆提供个性化回复
-- 不确定时主动说明，避免误导用户。
+- 回答结构化：先给结论，再分步骤说明，最后补充注意事项
+- 不确定时主动说明，避免误导用户
 - 语气亲切专业，使用中文回答
 {format_instruction}
 
@@ -74,16 +81,15 @@ SYSTEM_PROMPT_TEMPLATE = """你是一位专业、友善的智能客服助手。
 **记忆管理（重要）**：
 当你从对话中了解到用户的重要信息时，必须调用 `save_memory` 工具保存。
 以下信息**必须记录**：
-- 订单信息：订单号、商品、数量、价格、状态
-- 物流信息：快递公司、运单号、收件地址、发货/到货时间
-- 用户身份：姓名、电话、地址、账号
-- 售后问题：退货、退款、换货、投诉、维修
-- 产品咨询：产品规格、型号、功能、兼容性、价格咨询
-- 支付问题：支付方式、支付失败、退款到账
+- API对接：API Key/Secret、接口调用问题、Webhook配置、错误码
+- KYC认证：KYC级别、提交材料、审核状态、活体认证进度
+- 充值相关：钱包地址、充值金额、资金池状态、到账问题
+- 开卡问题：卡类型、申请参数、卡号、激活状态、限额咨询
+- 用户身份：机构名称、联系人、手机号、邮箱
 
 以下信息**不要保存**：
 - 闲聊、寒暄（如"你好"、"谢谢"、"今天天气不错"）
-- 与订单/售后无关的个人信息
+- 与API对接/KYC/充值/开卡无关的个人信息
 - 重复确认已记录过的内容
 
 每次对话最多调用 2 次 `save_memory`。
@@ -99,6 +105,11 @@ RAG_CONTEXT_TEMPLATE = """
 {rag_content}
 """
 
+RAG_EMPTY_CONTEXT = """
+【相关知识库内容】
+（知识库中未找到与用户问题相关的内容）
+"""
+
 
 # ====================== 工具定义 ======================
 SAVE_MEMORY_TOOL = {
@@ -106,7 +117,7 @@ SAVE_MEMORY_TOOL = {
     "function": {
         "name": "save_memory",
         "description": "保存一条重要信息到用户记忆库。"
-                       "当用户透露偏好、需求、订单信息、身份信息等值得记住的内容时调用。"
+                       "当用户透露API对接、KYC认证、充值相关、开卡问题、身份信息等值得记住的内容时调用。"
                        "不要在闲聊或无关对话时调用。",
         "parameters": {
             "type": "object",
@@ -118,7 +129,7 @@ SAVE_MEMORY_TOOL = {
                 "category": {
                     "type": "string",
                     "description": "记忆分类",
-                    "enum": ["用户偏好", "订单信息", "售后记录", "产品咨询", "对话记录", "通用"],
+                    "enum": ["API对接", "KYC认证", "充值相关", "开卡问题", "对话记录", "通用"],
                 },
             },
             "required": ["content"],
@@ -132,9 +143,10 @@ class CustomerServiceAgent:
     智能客服 Agent
     """
 
-    def __init__(self, knowledge_base: KnowledgeBase, memory_manager: MemoryManager):
+    def __init__(self, knowledge_base: KnowledgeBase, memory_manager: MemoryManager, cache: AnswerCache = None):
         self.kb = knowledge_base
         self.mm = memory_manager
+        self.cache = cache
 
         # 同步客户端（普通调用）
         self.llm = OpenAI(
@@ -163,7 +175,7 @@ class CustomerServiceAgent:
         """构建带 RAG 的用户消息"""
         if rag_context:
             return f"{RAG_CONTEXT_TEMPLATE.format(rag_content=rag_context)}\n\n用户问题：{user_input}"
-        return user_input
+        return f"{RAG_EMPTY_CONTEXT}\n\n用户问题：{user_input}"
 
     def _should_archive(self, user_input: str, answer: str) -> bool:
         """
@@ -206,6 +218,15 @@ class CustomerServiceAgent:
         _overall_start = _t.time()
         conversation_history = conversation_history or []
 
+        # ★ Step 0: 查询问答缓存（命中直接返回，跳过 RAG + LLM）
+        # ⚠️ 缓存已临时禁用（用于无缓存测试），如需启用请取消下方注释
+        # if self.cache:
+        #     cached = self.cache.get(user_input, user_id)
+        #     if cached:
+        #         logger.info(f"[缓存] 命中，跳过 RAG + LLM | query='{user_input[:40]}'")
+        #         return cached
+        logger.debug(f"[缓存已禁用] 跳过缓存查询 | query='{user_input[:40]}'")
+
         # Step 1+2: 并行检索记忆和 RAG
         _t1 = _t.time()
         from concurrent.futures import ThreadPoolExecutor
@@ -219,6 +240,27 @@ class CustomerServiceAgent:
         _t3 = _t.time()
         memory_context = self.mm.format_memory_context_from_list(memories_used)
         rag_context = self.kb.format_context_from_results(rag_results)
+
+        # ★ 知识库硬约束：RAG 没有结果或最高分太低 → 直接返回"不支持"，不调用 LLM
+        _REJECT_ANSWER = "抱歉，您的问题不在我的知识范围内，暂时无法回答。如需进一步帮助，请联系人工客服。"
+        if not rag_results:
+            logger.info(f"[知识约束] RAG 无结果，直接拒绝 | query='{user_input[:40]}'")
+            return {
+                "answer": _REJECT_ANSWER,
+                "rag_sources": [],
+                "memories_used": [m.get("memory", "") for m in memories_used],
+                "memory_archived": False,
+                "model": QWEN_MODEL,
+            }
+        if rag_results[0]["score"] < RAG_SCORE_THRESHOLD:
+            logger.info(f"[知识约束] RAG 最高分={rag_results[0]['score']}，低于 {RAG_SCORE_THRESHOLD}，直接拒绝 | query='{user_input[:40]}'")
+            return {
+                "answer": _REJECT_ANSWER,
+                "rag_sources": [],
+                "memories_used": [m.get("memory", "") for m in memories_used],
+                "memory_archived": False,
+                "model": QWEN_MODEL,
+            }
 
         # Step 3: 构建 Prompt
         system_prompt = self._build_system_prompt(memory_context)
@@ -320,7 +362,7 @@ class CustomerServiceAgent:
             f"总计={(_t7-_overall_start)*1000:.0f}ms"
         )
 
-        return {
+        result = {
             "answer": answer,
             "rag_sources": [
                 {
@@ -334,6 +376,18 @@ class CustomerServiceAgent:
             "memory_archived": archived,
             "model": QWEN_MODEL,
         }
+
+        # ★ Step 8: 写入问答缓存（仅对知识库命中的正常回答缓存）
+        # ⚠️ 缓存已临时禁用（用于无缓存测试），如需启用请取消下方注释
+        # if self.cache and rag_results and rag_results[0]["score"] >= RAG_SCORE_THRESHOLD:
+        #     self.cache.set(
+        #         query=user_input,
+        #         answer=answer,
+        #         rag_sources=result["rag_sources"],
+        #         user_id=user_id,
+        #     )
+
+        return result
 
     async def stream_chat(
         self,

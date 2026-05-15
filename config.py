@@ -2,9 +2,16 @@
 全局配置模块
 """
 import os
+import logging
+from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
+
+# ====================== 项目根目录 ======================
+_PROJECT_ROOT = Path(__file__).resolve().parent
 
 # ====================== Qwen / DashScope ======================
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
@@ -14,8 +21,55 @@ QWEN_EMBEDDING_MODEL = os.getenv("QWEN_EMBEDDING_MODEL", "text-embedding-v3")
 # DashScope OpenAI 兼容接口
 QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
+# ====================== 启动校验 ======================
+_STARTUP_WARNINGS = []
+
+
+def check_startup() -> list[str]:
+    """
+    启动校验，返回警告列表。
+    在 main.py 的 lifespan 中调用，有警告时打印日志但不阻止启动。
+    """
+    warnings = []
+
+    # 1. API Key 校验
+    if not DASHSCOPE_API_KEY or DASHSCOPE_API_KEY.startswith("sk-your"):
+        warnings.append(
+            "DASHSCOPE_API_KEY 未配置或使用占位符！"
+            "请在 .env 文件中设置有效的 API Key，否则 RAG/Embedding/LLM 功能将无法使用。"
+        )
+
+    # 2. ChromaDB 目录可写性
+    chroma_path = Path(CHROMA_PERSIST_PATH)
+    if not chroma_path.exists():
+        try:
+            chroma_path.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            warnings.append(f"ChromaDB 目录不可创建: {chroma_path} ({e})")
+    elif not os.access(chroma_path, os.W_OK):
+        warnings.append(f"ChromaDB 目录不可写: {chroma_path}")
+
+    # 3. 必要依赖检查
+    try:
+        import chromadb  # noqa: F401
+    except ImportError:
+        warnings.append("chromadb 未安装，请运行: pip install chromadb")
+
+    try:
+        import openai  # noqa: F401
+    except ImportError:
+        warnings.append("openai 未安装，请运行: pip install openai")
+
+    try:
+        from mem0 import Memory  # noqa: F401
+    except ImportError:
+        warnings.append("mem0ai 未安装，请运行: pip install mem0ai")
+
+    return warnings
+
+
 # ====================== ChromaDB ======================
-CHROMA_PERSIST_PATH = os.getenv("CHROMA_PERSIST_PATH", "./data/chroma_db")
+CHROMA_PERSIST_PATH = os.getenv("CHROMA_PERSIST_PATH", str(_PROJECT_ROOT / "data" / "chroma_db"))
 CHROMA_COLLECTION_NAME = "customer_service_kb"  # 知识库 collection
 CHROMA_MEMORY_COLLECTION = "mem0_memory"         # mem0 记忆 collection
 
@@ -42,22 +96,6 @@ MEMORY_STRATEGY = os.getenv("MEM0_MEMORY_STRATEGY", "customer_service")
 APP_PORT = int(os.getenv("APP_PORT", 8000))
 APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
 DEBUG = os.getenv("DEBUG", "true").lower() == "true"
-
-# ====================== Merchant Agent ======================
-# 商户业务接口基础 URL（可配置为内网地址或 Mock 地址）
-MERCHANT_API_BASE_URL = os.getenv("MERCHANT_API_BASE_URL", "http://localhost:8080/api")
-# 商户接口鉴权参数
-MERCHANT_API_KEY = os.getenv("MERCHANT_API_KEY", "")          # API Key
-MERCHANT_API_SECRET = os.getenv("MERCHANT_API_SECRET", "")    # API Secret
-MERCHANT_API_PASSPHRASE = os.getenv("MERCHANT_API_PASSPHRASE", "")  # Passphrase
-# 兼容旧字段（优先级：独立字段 > TOKEN 字段）
-MERCHANT_API_TOKEN = os.getenv("MERCHANT_API_TOKEN", "")
-# 请求超时（秒）
-MERCHANT_API_TIMEOUT = int(os.getenv("MERCHANT_API_TIMEOUT", "10"))
-
-# ====================== Orchestrator ======================
-# Router 使用的模型（可选更轻量的模型降低延迟）
-ROUTER_MODEL = os.getenv("ROUTER_MODEL", "qwen-plus")
 
 # ====================== Telegram Bot ======================
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")

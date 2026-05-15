@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 mem0ai 记忆管理模块
 - 使用 mem0ai 为每个用户维护长期记忆
@@ -36,20 +38,19 @@ logger = logging.getLogger(__name__)
 
 # 策略1：客服场景（默认）
 CUSTOMER_SERVICE_INSTRUCTIONS = """
-你是一位专业的电商客服记忆提取助手。请从对话中提取与客户服务相关的重要信息。
+你是一位专业的金融卡平台客服记忆提取助手。请从对话中提取与客户服务相关的重要信息。
 
 【必须提取】
-- 订单信息：订单号、商品、数量、价格、状态
-- 物流信息：快递公司、运单号、收件地址、发货/到货时间
-- 用户身份：姓名、电话、地址、账号
-- 售后问题：退货、退款、换货、投诉、维修
-- 产品咨询：产品规格、型号、功能、兼容性、价格咨询
-- 支付问题：支付方式、支付失败、退款到账
+- API对接：API Key/Secret、接口调用问题、Webhook配置、错误码
+- KYC认证：KYC级别（无/标准/加强）、提交材料、审核状态、活体认证进度
+- 充值相关：钱包地址、充值金额、资金池状态、到账问题
+- 开卡问题：卡类型（Native/UQ/JDB）、申请参数、卡号、激活状态、限额咨询
+- 用户身份：机构名称、联系人姓名、手机号、邮箱
 
 【忽略内容】
 - 闲聊、寒暄（如"你好"、"谢谢"、"今天天气不错"）
 - 重复确认已记录的信息
-- 与订单/售后无关的个人信息
+- 与API对接/KYC/充值/开卡无关的个人信息
 
 【输出格式】
 必须返回严格的 JSON 格式，禁止其他文字：
@@ -105,7 +106,7 @@ def _get_strategy_instructions(strategy: str) -> str:
 
 
 def build_mem0_config(
-    custom_instructions: str | None = None,
+    custom_instructions: Optional[str] = None,
 ) -> dict:
     """
     构建 mem0 配置，使用 Qwen + ChromaDB
@@ -171,7 +172,7 @@ class MemoryManager:
     - 支持 Custom Instructions（运行时覆盖/切换策略）
     """
 
-    def __init__(self, custom_instructions: str | None = None):
+    def __init__(self, custom_instructions: Optional[str] = None):
         """
         初始化记忆管理器
 
@@ -468,7 +469,7 @@ class MemoryManager:
             return {"strategy": "unknown", "instructions_preview": ""}
         instr = self._current_instructions
         # 关键词判断（不受缩进/换行影响）
-        if "专业电商客服" in instr or "客服记忆提取" in instr:
+        if "金融卡平台客服" in instr or "客服记忆提取" in instr:
             matched = "customer_service"
         elif "长期偏好和需求" in instr or "通用场景" in instr:
             matched = "general"

@@ -6,6 +6,8 @@
   <title>智能客服</title>
   <!-- Markdown 渲染 -->
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <!-- XSS 防护：DOMPurify 清理 HTML -->
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
   <style>
     :root {
       --primary: #6366f1;
@@ -97,6 +99,7 @@
       display: flex; flex-direction: column;
       background: #fafafa;
       flex-shrink: 0;
+      overflow-y: auto;
     }
     .sidebar-section { padding: 16px; }
     .sidebar-title {
@@ -168,7 +171,9 @@
     .upload-btn:hover { border-color: var(--primary); color: var(--primary); }
 
     .memory-list {
-      max-height: 180px; overflow-y: auto;
+      flex: 1;
+      overflow-y: auto;
+      min-height: 40px;
     }
     .memory-item {
       font-size: 12px; color: var(--text);
@@ -183,6 +188,7 @@
       background: none; border: 1px solid #fca5a5;
       border-radius: 6px; cursor: pointer;
       font-size: 12px; color: #ef4444; margin-top: 8px;
+      flex-shrink: 0;
     }
     .clear-btn:hover { background: #fef2f2; }
 
@@ -196,10 +202,10 @@
       margin-right: 4px;
       flex-shrink: 0;
     }
-    .memory-cat-badge[data-cat="用户偏好"] { background: #dbeafe; color: #1d4ed8; }
-    .memory-cat-badge[data-cat="订单信息"] { background: #d1fae5; color: #065f46; }
-    .memory-cat-badge[data-cat="售后记录"] { background: #fee2e2; color: #991b1b; }
-    .memory-cat-badge[data-cat="产品咨询"] { background: #fef3c7; color: #92400e; }
+    .memory-cat-badge[data-cat="API对接"] { background: #dbeafe; color: #1d4ed8; }
+    .memory-cat-badge[data-cat="KYC认证"] { background: #d1fae5; color: #065f46; }
+    .memory-cat-badge[data-cat="充值相关"] { background: #fef3c7; color: #92400e; }
+    .memory-cat-badge[data-cat="开卡问题"] { background: #fee2e2; color: #991b1b; }
     .memory-cat-badge[data-cat="通用"] { background: #f1f5f9; color: #64748b; }
     .memory-cat-badge[data-cat="对话记录"] { background: #ede9fe; color: #6d28d9; }
     .memory-item.conv-record .mem-text-short {
@@ -654,10 +660,10 @@
         <div class="memory-filter-row">
           <select class="memory-filter-select" id="memory-filter" onchange="loadMemory()">
             <option value="">全部分类</option>
-            <option value="用户偏好">用户偏好</option>
-            <option value="订单信息">订单信息</option>
-            <option value="售后记录">售后记录</option>
-            <option value="产品咨询">产品咨询</option>
+            <option value="API对接">API对接</option>
+            <option value="KYC认证">KYC认证</option>
+            <option value="充值相关">充值相关</option>
+            <option value="开卡问题">开卡问题</option>
             <option value="对话记录">对话记录</option>
             <option value="通用">通用</option>
           </select>
@@ -829,6 +835,20 @@ function selectUser(uid) {
   document.querySelectorAll('.user-item').forEach(el => {
     el.classList.toggle('active', el.dataset.uid === uid);
   });
+  // 清空对话历史
+  conversationHistory = [];
+  // 重置聊天界面为欢迎页
+  document.getElementById('messages').innerHTML = `
+    <div class="welcome">
+      <div class="emoji">💬</div>
+      <h2>你好，我是智能客服助手</h2>
+      <p>基于 mem0 记忆 + RAG 知识库 + 通义千问</p>
+      <div class="quick-questions">
+        <div class="quick-q" onclick="sendQuick('如何使用KYC的API？')">如何使用KYC的API？</div>
+        <div class="quick-q" onclick="sendQuick('USD和EUR卡申请参数的区别？')">USD和EUR卡申请参数的区别？</div>
+      </div>
+    </div>
+  `;
   loadMemory();
   showToast(`已切换到用户：${uid}`);
 }
@@ -913,10 +933,10 @@ function appendMessage(role, text, ragSources = [], memoriesUsed = []) {
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
   if (role === 'bot') {
-    // 用 marked.js 渲染 Markdown
+    // 用 marked.js 渲染 Markdown，DOMPurify 防 XSS
     try {
       marked.setOptions({ breaks: true, gfm: true });
-      bubble.innerHTML = marked.parse(text);
+      bubble.innerHTML = DOMPurify.sanitize(marked.parse(text));
     } catch (e) {
       bubble.textContent = text; // 降级：显示纯文本
     }
@@ -1046,7 +1066,17 @@ async function loadMemory() {
 }
 
 async function deleteMemoryItem(memoryId) {
-  if (!confirm('确定删除此条记忆？')) return;
+  // 两次点击确认机制（避免 confirm() 被浏览器拦截）
+  const btnKey = '_delMem_' + memoryId;
+  if (!window[btnKey]) {
+    // 第一次点击：标记等待确认，3秒后自动恢复
+    window[btnKey] = true;
+    showToast('⚠️ 再次点击删除按钮确认删除');
+    setTimeout(() => { window[btnKey] = false; }, 3000);
+    return;
+  }
+  // 第二次点击：执行删除
+  window[btnKey] = false;
   try {
     const resp = await fetch(`${API}/memory/${encodeURIComponent(getUserId())}/${encodeURIComponent(memoryId)}`, {
       method: 'DELETE',
@@ -1064,14 +1094,45 @@ async function deleteMemoryItem(memoryId) {
 }
 
 async function clearMemory() {
-  if (!confirm(`确定清除用户 ${getUserId()} 的所有记忆？`)) return;
+  const uid = getUserId();
+  // 用内联确认代替 confirm()，避免弹窗被浏览器拦截
+  if (!window._clearConfirmed) {
+    const btn = document.querySelector('.clear-btn');
+    btn.textContent = `⚠️ 再次点击确认清除 ${uid} 的记忆`;
+    btn.style.background = '#fef2f2';
+    btn.style.fontWeight = '600';
+    window._clearConfirmed = true;
+    window._clearTimer = setTimeout(() => {
+      btn.textContent = '清除记忆';
+      btn.style.background = '';
+      btn.style.fontWeight = '';
+      window._clearConfirmed = false;
+    }, 3000);
+    return;
+  }
+  // 第二次点击，执行清除
+  clearTimeout(window._clearTimer);
+  window._clearConfirmed = false;
+  const btn = document.querySelector('.clear-btn');
+  btn.textContent = '清除中...';
+  btn.disabled = true;
   try {
-    await fetch(`${API}/memory/${getUserId()}`, { method: 'DELETE' });
-    showToast('✅ 记忆已清除');
-    loadMemory();
-    conversationHistory = [];
+    const resp = await fetch(`${API}/memory/${encodeURIComponent(uid)}`, { method: 'DELETE' });
+    const data = await resp.json();
+    if (data.success) {
+      showToast('✅ 记忆已清除');
+      loadMemory();
+      conversationHistory = [];
+    } else {
+      showToast('❌ 清除失败');
+    }
   } catch(e) {
     showToast(`❌ 清除失败：${e.message}`);
+  } finally {
+    btn.textContent = '清除记忆';
+    btn.style.background = '';
+    btn.style.fontWeight = '';
+    btn.disabled = false;
   }
 }
 
@@ -1175,10 +1236,10 @@ async function openDocDetail(sourceName) {
         const heading = c.heading ? `<div class="chunk-heading">📌 ${escapeHtml(c.heading)}</div>` : '';
         const label = c.heading ? '' : `<div style="font-size:11px;color:#94a3b8;margin-bottom:4px">块 ${c.chunk_index + 1}/${c.total_chunks}</div>`;
         const rawText = c.text.length > 800 ? c.text.substring(0, 800) + '\n\n…（已截断）' : c.text;
-        // 用 marked.js 渲染 Markdown，innerHTML 替换 textContent
+        // 用 marked.js 渲染 Markdown，DOMPurify 防 XSS，innerHTML 替换 textContent
         let htmlText;
         try {
-          htmlText = marked.parse(rawText);
+          htmlText = DOMPurify.sanitize(marked.parse(rawText));
         } catch(e) {
           htmlText = escapeHtml(rawText);
         }
@@ -1221,7 +1282,15 @@ function escapeJs(str) {
 
 // 删除文档
 async function deleteDoc(sourceName) {
-  if (!confirm(`确定要删除文档「${sourceName}」吗？删除后无法恢复。`)) return;
+  // 两次点击确认机制（避免 confirm() 被浏览器拦截）
+  const btnKey = '_delDoc_' + sourceName;
+  if (!window[btnKey]) {
+    window[btnKey] = true;
+    showToast(`⚠️ 再次点击删除按钮确认删除「${sourceName}」`);
+    setTimeout(() => { window[btnKey] = false; }, 3000);
+    return;
+  }
+  window[btnKey] = false;
   try {
     const resp = await fetch(`${API}/knowledge/${encodeURIComponent(sourceName)}`, { method: 'DELETE' });
     const data = await resp.json();
@@ -1303,7 +1372,7 @@ async function loadMemDetail(memoryId) {
     // Meta row
     const metaEl = document.getElementById('mem-detail-meta');
     const cat = m.metadata && m.metadata.category ? m.metadata.category : '通用';
-    const catColor = { '用户偏好': '#1d4ed8', '订单信息': '#065f46', '售后记录': '#991b1b', '产品咨询': '#92400e', '通用': '#64748b' }[cat] || '#64748b';
+    const catColor = { 'API对接': '#1d4ed8', 'KYC认证': '#065f46', '充值相关': '#92400e', '开卡问题': '#991b1b', '通用': '#64748b' }[cat] || '#64748b';
     const created = m.created_at ? new Date(m.created_at * 1000).toLocaleString('zh-CN') : '-';
     const updated = m.updated_at ? new Date(m.updated_at * 1000).toLocaleString('zh-CN') : '-';
     metaEl.innerHTML =

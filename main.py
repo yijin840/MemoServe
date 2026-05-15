@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 FastAPI 后端接口
 提供：
@@ -12,7 +14,6 @@ FastAPI 后端接口
 - GET  /health         - 健康检查
 - Telegram Bot（后台轮询，每个群对应一个 user_id）
 """
-import asyncio
 import logging
 import os
 import signal
@@ -27,12 +28,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
-from config import APP_HOST, APP_PORT, DEBUG, TELEGRAM_BOT_TOKEN
+from config import APP_HOST, APP_PORT, DEBUG, TELEGRAM_BOT_TOKEN, check_startup
 from rag_knowledge_base import KnowledgeBase
 from memory_manager import MemoryManager
+from answer_cache import AnswerCache
 from knowledge_agent import CustomerServiceAgent as KnowledgeAgent
-from merchant_agent import MerchantAgent
-from router_agent import OrchestratorAgent
+from router_agent import IntentClassifier
 
 # ====================== 日志配置 ======================
 logging.basicConfig(
@@ -44,27 +45,34 @@ logger = logging.getLogger(__name__)
 # 全局单例
 kb: Optional[KnowledgeBase] = None
 mm: Optional[MemoryManager] = None
-agent: Optional[OrchestratorAgent] = None  # 统一入口（Orchestrator）
+cache: Optional[AnswerCache] = None
+agent: Optional[IntentClassifier] = None  # 意图分类器（统一入口）
+knowledge_agent: Optional[KnowledgeAgent] = None
 _telegram_app = None  # Telegram bot Application 实例
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
-    global kb, mm, agent, _telegram_app
+    global kb, mm, cache, agent, knowledge_agent, _telegram_app
+
+    # 启动校验
+    _warnings = check_startup()
+    if _warnings:
+        for w in _warnings:
+            logger.warning(f"[启动校验] {w}")
+
     logger.info("初始化知识库...")
     kb = KnowledgeBase()
     logger.info("初始化记忆管理器...")
     mm = MemoryManager()
+    logger.info("初始化问答缓存...")
+    cache = AnswerCache()
     logger.info("初始化知识库 Agent...")
-    knowledge_agent = KnowledgeAgent(kb, mm)
-    logger.info("初始化商户数据 Agent...")
-    merchant_agent = MerchantAgent(mm)
-    logger.info("初始化 Orchestrator（路由 Agent）...")
-    agent = OrchestratorAgent(knowledge_agent, merchant_agent)
-    logger.info("✅ 服务启动完成（多 Agent 架构）")
-    # 后台异步写入演示知识（不阻塞启动）
-    asyncio.create_task(_async_seed_demo_knowledge(kb))
+    knowledge_agent = KnowledgeAgent(kb, mm, cache=cache)
+    logger.info("初始化意图分类器...")
+    agent = IntentClassifier()
+    logger.info("✅ 服务启动完成（IntentClassifier + KnowledgeAgent）")
 
     # 启动 Telegram Bot（如果配置了 Token）
     _telegram_app = None
@@ -72,6 +80,7 @@ async def lifespan(app: FastAPI):
         try:
             from telegram_bot import build_bot_app
             _telegram_app = build_bot_app(agent)
+            _telegram_app.bot_data["knowledge_agent"] = knowledge_agent
             # 在后台线程启动 polling（不阻塞 FastAPI）
             import subprocess, sys
             def _start_bot():
@@ -99,15 +108,6 @@ async def lifespan(app: FastAPI):
             logger.warning(f"[Telegram] Bot 关闭异常：{e}")
     logger.info("服务关闭")
 
-
-async def _async_seed_demo_knowledge(knowledge_base: KnowledgeBase):
-    """异步后台写入演示知识"""
-    try:
-        await asyncio.get_event_loop().run_in_executor(None, _seed_demo_knowledge, knowledge_base)
-    except Exception as e:
-        logger.warning(f"演示知识写入失败（请检查 API Key）：{e}")
-
-
 # ====================== 初始化组件 ======================
 app = FastAPI(
     title="智能客服 API",
@@ -124,45 +124,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-def _seed_demo_knowledge(knowledge_base: KnowledgeBase):
-    """首次启动时写入演示知识内容"""
-    if knowledge_base.count() > 0:
-        return  # 已有内容，跳过
-
-    demo_docs = [
-        {
-            "text": "退款政策：购买后7天内可申请无理由退款。退款申请通过后，款项将在3-5个工作日内原路退回。超过7天的退款申请需提供商品质量问题证明。",
-            "metadata": {"source": "退款政策.txt", "category": "售后"},
-        },
-        {
-            "text": "配送说明：普通配送3-5天到货，支持顺丰快递、圆通、中通等快递公司。购买满99元免运费，不足99元收取运费8元。偏远地区（新疆、西藏、内蒙古等）运费另计。",
-            "metadata": {"source": "配送说明.txt", "category": "物流"},
-        },
-        {
-            "text": "会员权益：注册会员可享受积分购物返现，每消费1元积1分，100分可兑换1元优惠券。会员等级分为普通会员、银卡会员、金卡会员、钻石会员，不同等级享受不同折扣。",
-            "metadata": {"source": "会员权益.txt", "category": "会员"},
-        },
-        {
-            "text": "售后服务：商品在收货后30天内出现非人为损坏，可申请免费维修或更换。联系售后客服请拨打400-800-1234，工作时间为周一至周日9:00-21:00。",
-            "metadata": {"source": "售后服务.txt", "category": "售后"},
-        },
-        {
-            "text": "支付方式：支持微信支付、支付宝、银行卡、花呗分期、京东白条等多种支付方式。下单后24小时内未付款，订单将自动取消。",
-            "metadata": {"source": "支付方式.txt", "category": "支付"},
-        },
-        {
-            "text": "常见问题：1.如何查看订单状态？在「我的订单」页面可查看所有订单的实时状态。2.如何修改收货地址？在订单发货前可联系客服修改地址。3.如何使用优惠券？在结算页面的「优惠券」选项中选择可用券。",
-            "metadata": {"source": "FAQ.txt", "category": "FAQ"},
-        },
-    ]
-
-    for doc in demo_docs:
-        knowledge_base.add_text(doc["text"], metadata=doc["metadata"])
-
-    logger.info(f"✅ 已写入 {len(demo_docs)} 条演示知识")
-
-
 # ====================== 数据模型 ======================
 
 class ChatRequest(BaseModel):
@@ -173,11 +134,10 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     answer: str
-    rag_sources: list[dict]
-    memories_used: list[str]
-    model: str
-    routed_to: Optional[list[str]] = None       # 路由目标列表：["knowledge"] / ["merchant"] / ["knowledge", "merchant"]
-    tools_called: Optional[list[dict]] = None  # 商户 Agent 调用的工具
+    rag_sources: list[dict] = []
+    memories_used: list[str] = []
+    model: str = ""
+    intents: Optional[list[str]] = None  # 识别到的意图列表
 
 
 class AddTextRequest(BaseModel):
@@ -198,6 +158,8 @@ async def chat(req: ChatRequest):
             user_input=req.message,
             user_id=req.user_id,
             conversation_history=req.history,
+            update_memory=True,
+            knowledge_agent=knowledge_agent,
         )
         return result
     except Exception as e:
@@ -216,6 +178,7 @@ async def stream_chat(message: str, user_id: str = "default_user"):
             async for chunk in agent.stream_chat(
                 user_input=message,
                 user_id=user_id,
+                knowledge_agent=knowledge_agent,
             ):
                 yield f"data: {chunk}\n\n"
             yield "data: [DONE]\n\n"
@@ -362,7 +325,7 @@ class InstructionsRequest(BaseModel):
 async def switch_memory_strategy(req: StrategyRequest):
     """
     切换记忆提取策略
-    - customer_service：客服场景（默认），专注订单/物流/售后/产品咨询
+    - customer_service：客服场景（默认），专注API对接/KYC认证/充值/开卡等业务咨询
     - general：通用场景，宽松提取用户偏好和重要信息
     - strict：严格模式，只记录涉及金钱和法律承诺的内容
     """
@@ -497,20 +460,42 @@ async def list_users():
     return {"user_count": len(users), "users": users}
 
 
+# ====================== 问答缓存接口 ======================
+
+@app.get("/cache/stats", tags=["缓存"])
+async def get_cache_stats():
+    """查看缓存命中率统计"""
+    if not cache:
+        raise HTTPException(status_code=503, detail="服务初始化中")
+    return cache.stats
+
+
+@app.delete("/cache", tags=["缓存"])
+async def clear_cache(user_id: Optional[str] = None):
+    """
+    清除问答缓存
+    - 不传 user_id：清除全部缓存
+    - 传 user_id：只清除该用户的缓存
+    """
+    if not cache:
+        raise HTTPException(status_code=503, detail="服务初始化中")
+    cache.invalidate(user_id=user_id)
+    return {"success": True, "cleared_user": user_id or "all"}
+
+
 # ====================== 健康检查 ======================
 
 @app.get("/health", tags=["系统"])
 async def health():
     return {
         "status": "ok",
-        "architecture": "multi-agent",
+        "architecture": "single-agent + intent-classifier",
         "knowledge_chunks": kb.count() if kb else 0,
         "services": {
             "knowledge_base": kb is not None,
             "memory_manager": mm is not None,
-            "orchestrator": agent is not None,
-            "knowledge_agent": agent is not None and agent.knowledge is not None,
-            "merchant_agent": agent is not None and agent.merchant is not None,
+            "intent_classifier": agent is not None,
+            "knowledge_agent": knowledge_agent is not None,
         },
     }
 

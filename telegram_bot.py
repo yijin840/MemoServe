@@ -21,7 +21,7 @@ from telegram.ext import (
 )
 
 from knowledge_agent import CustomerServiceAgent
-from router_agent import OrchestratorAgent
+from router_agent import IntentClassifier
 from config import TELEGRAM_BOT_TOKEN
 
 logger = logging.getLogger(__name__)
@@ -268,7 +268,7 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
 
 async def _do_reply(msg, user_id: str, user_text: str, bot, context: ContextTypes.DEFAULT_TYPE):
     """统一的回复逻辑（群聊/私聊共用）"""
-    agent: Optional[Union[CustomerServiceAgent, OrchestratorAgent]] = context.bot_data.get("agent")
+    agent: Optional[Union[CustomerServiceAgent, IntentClassifier]] = context.bot_data.get("agent")
     if not agent:
         await msg.reply_text("⚠️ Agent 未初始化，请联系管理员。")
         return
@@ -277,6 +277,7 @@ async def _do_reply(msg, user_id: str, user_text: str, bot, context: ContextType
     await bot.send_chat_action(chat_id=msg.chat.id, action="typing")
 
     try:
+        ka = context.bot_data.get("knowledge_agent")
         result = await asyncio.get_running_loop().run_in_executor(
             None,
             agent.chat,
@@ -284,6 +285,7 @@ async def _do_reply(msg, user_id: str, user_text: str, bot, context: ContextType
             user_id,
             [],       # history（Telegram 暂不传历史，可扩展）
             True,     # update_memory
+            ka,       # knowledge_agent
         )
         answer = result.get("answer", "（无回复）")
 
@@ -303,7 +305,7 @@ async def _do_reply(msg, user_id: str, user_text: str, bot, context: ContextType
 
 # ====================== Bot 构建 ======================
 
-def build_bot_app(agent: Union[CustomerServiceAgent, OrchestratorAgent]):
+def build_bot_app(agent: Union[CustomerServiceAgent, IntentClassifier]):
     """构建 Telegram Application，注入 agent"""
     if not TELEGRAM_BOT_TOKEN:
         raise ValueError("TELEGRAM_BOT_TOKEN 未配置，请在 .env 中设置")
@@ -356,17 +358,16 @@ if __name__ == "__main__":
     from rag_knowledge_base import KnowledgeBase
     from memory_manager import MemoryManager
     from knowledge_agent import CustomerServiceAgent as KnowledgeAgent
-    from merchant_agent import MerchantAgent
-    from router_agent import OrchestratorAgent
+    from router_agent import IntentClassifier
 
     _kb = KnowledgeBase()
     _mm = MemoryManager()
     _knowledge_agent = KnowledgeAgent(_kb, _mm)
-    _merchant_agent = MerchantAgent(_mm)
-    _agent = OrchestratorAgent(_knowledge_agent, _merchant_agent)
-    _logger.info("Orchestrator Agent 初始化完成（多 Agent 路由）")
+    _agent = IntentClassifier()
+    _logger.info("IntentClassifier + KnowledgeAgent 初始化完成")
 
     app = build_bot_app(_agent)
+    app.bot_data["knowledge_agent"] = _knowledge_agent
     _logger.info("[Telegram] Bot 开始轮询...")
     try:
         app.run_polling(drop_pending_updates=True, close_loop=False)
