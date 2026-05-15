@@ -322,6 +322,7 @@ async def search_and_add_knowledge(req: SearchAndAddRequest):
 
         ids = kb.add_text(
             merged_content,
+            doc_id=source_name,  # 用时间戳+关键词做唯一 ID，避免同名搜索覆盖
             metadata={
                 "source": source_name,
                 "category": req.category,
