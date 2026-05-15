@@ -1355,7 +1355,7 @@ async function loadDocList() {
         <div class="doc-icon">${getFileEmoji(name)}</div>
         <div class="doc-info">
           <div class="doc-name" title="${escapeAttr(name)}">${name}</div>
-          <div class="doc-meta">${name.split('.').pop().toUpperCase()} 文件</div>
+          <div class="doc-meta">${name.startsWith('搜索:') ? '搜索导入' : name.split('.').pop().toUpperCase() + ' 文件'}</div>
         </div>
         <button class="doc-view" onclick="openDocDetail(\`${escapeJs(name)}\`)">查看</button>
         <button class="doc-delete" onclick="deleteDoc(\`${escapeJs(name)}\`)">删除</button>

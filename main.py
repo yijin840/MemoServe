@@ -300,7 +300,7 @@ async def search_and_add_knowledge(req: SearchAndAddRequest):
             if len(content) > 5000:
                 content = content[:5000] + "...(内容过长已截断)"
 
-            title = (item.get("title") or req.keyword)[:60]
+            title = (item.get("title") or req.keyword)[:30]
             source = f"搜索:{title}"
 
             ids = kb.add_text(
