@@ -171,8 +171,8 @@ def _check_search_relevance(keyword: str, title: str, content: str) -> bool:
     # 提取核心词汇（中英文，长度>=2）
     # 中文按字切，英文按词切
     kw = keyword.lower()
-    # 中文提取连续中文字符（长度>=2）
-    chinese_words = re.findall(r'[\u4e00-\u9fff]{2,}', kw)
+    # 中文提取连续中文字符（长度>=2，CJK统一表意文字范围）
+    chinese_words = re.findall('[\u4e00-\u9fff]{2,}', kw)
     # 英文/数字提取连续单词（长度>=2）
     english_words = re.findall(r'[a-z0-9]{2,}', kw)
     core_words = chinese_words + english_words
