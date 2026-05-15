@@ -9,7 +9,7 @@ FastAPI 后端接口
 - POST /knowledge/search-and-add - 搜索关键词并导入知识库
 - POST /knowledge/file - 上传文件到知识库
 - GET  /knowledge/list - 查看知识库来源列表
-- DELETE /knowledge/{source} - 删除知识库来源
+- DELETE /knowledge/?source=xxx - 删除知识库来源
 - GET  /memory/{user_id}     - 查看用户记忆
 - DELETE /memory/{user_id}   - 清除用户记忆
 - GET /health         - 健康检查
@@ -26,7 +26,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, HTMLResponse
 from pydantic import BaseModel, Field
@@ -263,9 +263,8 @@ async def search_and_add_knowledge(req: SearchAndAddRequest):
             if len(content) > 5000:
                 content = content[:5000] + "...(内容过长已截断)"
 
-            source = f"搜索:{req.keyword}"
-            if item["url"]:
-                source += f" ({item['url'][:100]})"
+            title = (item.get("title") or req.keyword)[:60]
+            source = f"搜索:{title}"
 
             ids = kb.add_text(
                 content,
@@ -519,18 +518,18 @@ async def list_knowledge():
     return {"total_chunks": kb.count(), "sources": sources}
 
 
-@app.delete("/knowledge/{source_name}", tags=["知识库"])
-async def delete_knowledge(source_name: str):
-    """按来源名称删除知识"""
+@app.delete("/knowledge/", tags=["知识库"])
+async def delete_knowledge(source_name: str = Query(..., description="来源名称")):
+    """按来源名称删除知识（使用 query parameter 避免 path 编码问题）"""
     if not kb:
         raise HTTPException(status_code=503, detail="服务初始化中")
     deleted = kb.delete_by_source(source_name)
     return {"success": True, "deleted_chunks": deleted}
 
 
-@app.get("/knowledge/{source_name}/chunks", tags=["知识库"])
-async def get_knowledge_chunks(source_name: str):
-    """查看指定文档来源的所有文本块内容"""
+@app.get("/knowledge/chunks/", tags=["知识库"])
+async def get_knowledge_chunks(source_name: str = Query(..., description="来源名称")):
+    """查看指定文档来源的所有文本块内容（使用 query parameter 避免 path 编码问题）"""
     if not kb:
         raise HTTPException(status_code=503, detail="服务初始化中")
     try:
