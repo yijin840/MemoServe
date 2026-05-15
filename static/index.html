@@ -1633,23 +1633,14 @@ async function searchAndAdd() {
 
     if (data.success) {
       let html = `<div style="margin-bottom:12px;padding:10px;background:#f0fdf4;border:1px solid #86efac;border-radius:8px;font-size:13px;color:#166534">
-        ✅ 搜索「${escapeHtml(keyword)}」完成，找到 ${data.search_results_count} 条结果，成功导入 ${data.imported_count} 条
+        ✅ 搜索「${escapeHtml(keyword)}」完成，已导入知识库
+        <div style="margin-top:4px;font-size:11px;color:#22c55e">来源：${escapeHtml(data.source || '')}</div>
       </div>`;
-
-      if (data.imported && data.imported.length > 0) {
-        html += '<div style="font-size:13px;font-weight:600;margin-bottom:8px">导入详情：</div>';
-        html += data.imported.map(item => `
-          <div style="padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:6px;font-size:12px">
-            <div style="font-weight:600;margin-bottom:2px">${escapeHtml(item.title || '无标题')}</div>
-            <div style="color:#94a3b8;font-size:11px">${item.url ? '🔗 ' + escapeHtml(item.url) : ''} | 分块 ${item.chunk_count} 条</div>
-          </div>
-        `).join('');
-      }
 
       resultEl.innerHTML = html;
       loadKnowledgeSources();  // 刷新侧边栏知识库统计
       loadDocList();           // 刷新模态框文档列表
-      showToast(`✅ 已导入 ${data.imported_count} 条知识`);
+      showToast(`✅ 已导入「${escapeHtml(keyword)}」`);
     } else {
       resultEl.innerHTML = `<div style="text-align:center;padding:20px;color:#ef4444">❌ 导入失败</div>`;
     }
