@@ -6,8 +6,11 @@ Telegram Bot 集成
 - 支持 /setid、/resetid、/whoami 命令
 """
 import asyncio
+import json
 import logging
+import os
 import re
+from pathlib import Path
 from typing import Optional, Union
 
 from telegram import Update
@@ -26,9 +29,32 @@ from config import TELEGRAM_BOT_TOKEN
 
 logger = logging.getLogger(__name__)
 
-# 群 ID → user_id 映射（内存，重启后需重新 /setid）
-# 持久化可改为读 JSON 文件
-GROUP_USER_MAP: dict[str, str] = {}
+# 群 ID → user_id 映射（持久化到 JSON 文件，重启不丢失）
+GROUP_MAP_FILE = Path(__file__).resolve().parent / "data" / "telegram_group_map.json"
+
+def _load_group_map() -> dict[str, str]:
+    """从 JSON 文件加载群 ID → user_id 映射"""
+    if GROUP_MAP_FILE.exists():
+        try:
+            with open(GROUP_MAP_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            logger.info(f"[Telegram] 已从 {GROUP_MAP_FILE} 加载 {len(data)} 条群映射")
+            return data
+        except Exception as e:
+            logger.warning(f"[Telegram] 读取群映射文件失败：{e}，使用空映射")
+    return {}
+
+def _save_group_map():
+    """将当前 GROUP_USER_MAP 持久化到 JSON 文件"""
+    try:
+        GROUP_MAP_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(GROUP_MAP_FILE, "w", encoding="utf-8") as f:
+            json.dump(GROUP_USER_MAP, f, ensure_ascii=False, indent=2)
+        logger.info(f"[Telegram] 群映射已保存到 {GROUP_MAP_FILE}")
+    except Exception as e:
+        logger.error(f"[Telegram] 保存群映射失败：{e}")
+
+GROUP_USER_MAP: dict[str, str] = _load_group_map()
 
 
 # ====================== Markdown → Telegram HTML 转换 ======================
@@ -167,6 +193,7 @@ async def cmd_setid(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = context.args[0].strip()
     GROUP_USER_MAP[str(chat.id)] = user_id
+    _save_group_map()
     await update.message.reply_text(
         f"✅ 本群已绑定 user_id：<code>{user_id}</code>",
         parse_mode=ParseMode.HTML,
@@ -181,6 +208,7 @@ async def cmd_resetid(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("请在群组内使用此命令。")
         return
     GROUP_USER_MAP.pop(str(chat.id), None)
+    _save_group_map()
     await update.message.reply_text("✅ 本群 user_id 绑定已清除，将使用默认群 ID。")
 
 
