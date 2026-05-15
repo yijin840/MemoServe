@@ -53,6 +53,10 @@ agent: Optional[IntentClassifier] = None  # 意图分类器（统一入口）
 knowledge_agent: Optional[KnowledgeAgent] = None
 _telegram_app = None  # Telegram bot Application 实例
 
+# 知识库文件目录
+KNOWLEDGE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "knowledge")
+os.makedirs(KNOWLEDGE_DIR, exist_ok=True)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -295,6 +299,96 @@ async def search_and_add_knowledge(req: SearchAndAddRequest):
         logger.error(f"搜索并导入失败: {e}")
         raise HTTPException(status_code=500, detail=f"搜索并导入失败：{str(e)}")
 
+# ====================== 知识库文件管理接口 ======================
+
+def _list_knowledge_files(directory: str = None, relative_path: str = "") -> list[dict]:
+    """递归列出知识库目录下的所有文件（返回统一结构）"""
+    if directory is None:
+        directory = KNOWLEDGE_DIR
+    result = []
+    try:
+        for entry in sorted(os.listdir(directory)):
+            full_path = os.path.join(directory, entry)
+            rel_path = os.path.join(relative_path, entry) if relative_path else entry
+            if os.path.isdir(full_path):
+                result.append({
+                    "name": entry,
+                    "path": rel_path,
+                    "type": "dir",
+                    "size": 0,
+                    "modified": os.path.getmtime(full_path),
+                    "children": _list_knowledge_files(full_path, rel_path),
+                })
+            else:
+                ext = os.path.splitext(entry)[1].lower()
+                result.append({
+                    "name": entry,
+                    "path": rel_path,
+                    "type": "file",
+                    "size": os.path.getsize(full_path),
+                    "modified": os.path.getmtime(full_path),
+                    "ext": ext,
+                })
+    except Exception as e:
+        logger.error(f"列出文件失败 {directory}: {e}")
+    return result
+
+
+@app.get("/knowledge/files", tags=["知识库文件管理"])
+async def list_knowledge_files():
+    """列出知识库文件目录（data/knowledge/）下的所有文件"""
+    files = _list_knowledge_files()
+    return {"files": files, "total": sum(1 for f in files if f["type"] == "file")}
+
+
+@app.get("/knowledge/files/{file_path:path}/content", tags=["知识库文件管理"])
+async def get_knowledge_file_content(file_path: str):
+    """预览知识库文件内容（仅支持文本文件）"""
+    # 安全校验：防止路径穿越
+    full_path = os.path.normpath(os.path.join(KNOWLEDGE_DIR, file_path))
+    if not full_path.startswith(os.path.normpath(KNOWLEDGE_DIR)):
+        raise HTTPException(status_code=400, detail="非法文件路径")
+    if not os.path.isfile(full_path):
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    ext = os.path.splitext(full_path)[1].lower()
+    text_exts = {".txt", ".md", ".csv", ".json", ".yaml", ".yml", ".log"}
+
+    if ext not in text_exts:
+        return {"success": True, "path": file_path, "type": ext.lstrip("."), "content": None, "message": "非文本文件，无法预览"}
+
+    try:
+        with open(full_path, encoding="utf-8") as f:
+            content = f.read()
+        return {"success": True, "path": file_path, "type": "text", "content": content[:10000]}
+    except UnicodeDecodeError:
+        with open(full_path, encoding="gbk", errors="ignore") as f:
+            content = f.read()
+        return {"success": True, "path": file_path, "type": "text", "content": content[:10000]}
+
+
+@app.delete("/knowledge/files/{file_path:path}", tags=["知识库文件管理"])
+async def delete_knowledge_file(file_path: str):
+    """删除知识库文件，并同步删除知识库中的对应内容"""
+    full_path = os.path.normpath(os.path.join(KNOWLEDGE_DIR, file_path))
+    if not full_path.startswith(os.path.normpath(KNOWLEDGE_DIR)):
+        raise HTTPException(status_code=400, detail="非法文件路径")
+    if not os.path.isfile(full_path):
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    try:
+        # 从知识库中删除对应来源
+        source_name = os.path.basename(full_path)
+        deleted = kb.delete_by_source(source_name) if kb else 0
+        logger.info(f"[文件管理] 删除知识库来源：{source_name}，删除块数：{deleted}")
+
+        # 删除文件
+        os.unlink(full_path)
+        return {"success": True, "deleted_chunks": deleted, "message": f"文件 {file_path} 已删除"}
+    except Exception as e:
+        logger.error(f"删除文件失败：{e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # ====================== 对话接口 ======================
 
@@ -364,7 +458,7 @@ async def add_knowledge_text(req: AddTextRequest):
 
 @app.post("/knowledge/file", tags=["知识库"])
 async def upload_knowledge_file(file: UploadFile = File(...)):
-    """上传文件到知识库（支持 .txt/.md/.pdf/.docx）"""
+    """上传文件到知识库（支持 .txt/.md/.pdf/.docx），文件保存到 data/knowledge/ 目录"""
     if not kb:
         raise HTTPException(status_code=503, detail="服务初始化中")
 
@@ -373,22 +467,33 @@ async def upload_knowledge_file(file: UploadFile = File(...)):
     if suffix not in allowed:
         raise HTTPException(status_code=400, detail=f"不支持的文件类型：{suffix}")
 
-    # 写入临时文件
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        content = await file.read()
-        tmp.write(content)
-        tmp_path = tmp.name
+    # 保存到 KNOWLEDGE_DIR，处理重名
+    base_name = file.filename
+    save_path = os.path.join(KNOWLEDGE_DIR, base_name)
+    counter = 1
+    while os.path.exists(save_path):
+        name_part, ext_part = os.path.splitext(base_name)
+        new_name = f"{name_part}_{counter}{ext_part}"
+        save_path = os.path.join(KNOWLEDGE_DIR, new_name)
+        counter += 1
 
     try:
-        ids = kb.add_file(tmp_path)
+        # 保存文件
+        content = await file.read()
+        with open(save_path, "wb") as f:
+            f.write(content)
+        logger.info(f"[文件管理] 文件已保存：{save_path}")
+
+        # 导入知识库
+        ids = kb.add_file(save_path)
         return {
             "success": True,
-            "filename": file.filename,
+            "filename": os.path.basename(save_path),
+            "saved_path": save_path,
             "chunk_count": len(ids),
         }
     except Exception as e:
         error_msg = str(e)
-        # 识别 401 / API Key 无效错误，提示清晰
         if "401" in error_msg or "invalid_api_key" in error_msg.lower() or "Incorrect API key" in error_msg:
             raise HTTPException(
                 status_code=500,
@@ -399,9 +504,10 @@ async def upload_knowledge_file(file: UploadFile = File(...)):
                     "保存后重启服务即可。"
                 ),
             )
+        # 如果导入失败，删除已保存的文件
+        if os.path.exists(save_path):
+            os.unlink(save_path)
         raise HTTPException(status_code=500, detail=error_msg)
-    finally:
-        os.unlink(tmp_path)
 
 
 @app.get("/knowledge/list", tags=["知识库"])

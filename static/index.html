@@ -761,6 +761,7 @@
       <button class="modal-tab active" id="tab-docs" onclick="switchTab('docs')">📄 文档列表</button>
       <button class="modal-tab" id="tab-add" onclick="switchTab('add')">✏️ 手动录入</button>
       <button class="modal-tab" id="tab-search" onclick="switchTab('search')">🔍 搜索导入</button>
+      <button class="modal-tab" id="tab-files" onclick="switchTab('files')">📁 文件管理</button>
     </div>
 
     <!-- 文档列表 Tab -->
@@ -795,6 +796,18 @@
         </div>
       </div>
       <div id="search-result" style="min-height:40px"></div>
+    </div>
+
+    <!-- 文件管理 Tab -->
+    <div class="modal-body" id="body-files" style="display:none">
+      <div style="margin-bottom:12px;display:flex;gap:8px;align-items:center">
+        <input type="file" id="file-manager-input" style="display:none" onchange="uploadToKnowledgeDir()" />
+        <button class="btn-primary" onclick="document.getElementById('file-manager-input').click()" style="white-space:nowrap">📁 上传文件</button>
+        <span style="font-size:12px;color:#94a3b8" id="file-count">加载中...</span>
+      </div>
+      <div id="file-list-container" style="max-height:400px;overflow-y:auto">
+        <div style="text-align:center;padding:20px;color:#94a3b8">加载中...</div>
+      </div>
     </div>
   </div>
 </div>
@@ -1185,9 +1198,16 @@ function switchTab(tab) {
   document.getElementById('tab-docs').classList.toggle('active', tab === 'docs');
   document.getElementById('tab-add').classList.toggle('active', tab === 'add');
   document.getElementById('tab-search').classList.toggle('active', tab === 'search');
+  document.getElementById('tab-files').classList.toggle('active', tab === 'files');
   document.getElementById('body-docs').style.display = tab === 'docs' ? '' : 'none';
   document.getElementById('body-add').style.display = tab === 'add' ? '' : 'none';
   document.getElementById('body-search').style.display = tab === 'search' ? '' : 'none';
+  if (tab === 'files') {
+    document.getElementById('body-files').style.display = '';
+    loadFileList();
+  } else {
+    document.getElementById('body-files').style.display = 'none';
+  }
 }
 
 // 获取文件类型对应的 emoji
@@ -1283,6 +1303,106 @@ function backToList() {
   const headerEl = document.querySelector('#kb-modal .modal-header h2');
   headerEl.innerHTML = '📚 知识库管理';
   loadDocList();
+}
+
+// ========== 知识库文件管理 ==========
+
+async function loadFileList() {
+  const container = document.getElementById('file-list-container');
+  const countEl = document.getElementById('file-count');
+  container.innerHTML = '<div style="text-align:center;padding:20px;color:#94a3b8">⏳ 加载中...</div>';
+  try {
+    const resp = await fetch(`${API}/knowledge/files`);
+    const data = await resp.json();
+    const files = (data.files || []).filter(f => f.type === 'file');
+    if (countEl) countEl.textContent = `共 ${files.length} 个文件`;
+
+    if (files.length === 0) {
+      container.innerHTML = '<div style="text-align:center;padding:20px;color:#94a3b8">暂无文件，点击上方「上传文件」添加</div>';
+      return;
+    }
+
+    container.innerHTML = files.map(f => {
+      const sizeStr = f.size > 1048576 ? (f.size / 1048576).toFixed(1) + ' MB' : f.size > 1024 ? (f.size / 1024).toFixed(1) + ' KB' : f.size + ' B';
+      const dateStr = new Date(f.modified * 1000).toLocaleString('zh-CN');
+      const ext = (f.ext || '').toLowerCase();
+      const icon = {'.md':'📝', '.txt':'📄', '.pdf':'📕', '.docx':'📘'}[ext] || '📎';
+      const encodedPath = encodeURIComponent(f.path);
+      return `
+        <div style="display:flex;align-items:center;padding:8px 12px;border-bottom:1px solid #f1f5f9;gap:8px;font-size:13px">
+          <span style="font-size:16px">${icon}</span>
+          <span style="flex:1;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" onclick="previewFile('${encodedPath}')" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
+          <span style="color:#94a3b8;font-size:11px;white-space:nowrap">${sizeStr}</span>
+          <span style="color:#94a3b8;font-size:11px;white-space:nowrap">${dateStr}</span>
+          <button style="background:none;border:none;cursor:pointer;color:#ef4444;font-size:16px;padding:2px 6px" onclick="deleteKnowledgeFile('${encodedPath}')" title="删除">🗑️</button>
+        </div>`;
+    }).join('');
+  } catch(e) {
+    container.innerHTML = `<div style="text-align:center;padding:20px;color:#ef4444">加载失败：${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function uploadToKnowledgeDir() {
+  const input = document.getElementById('file-manager-input');
+  if (!input.files || input.files.length === 0) return;
+  const file = input.files[0];
+  const btn = input.previousElementSibling;
+  btn.disabled = true;
+  btn.textContent = '上传中...';
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    const resp = await fetch(`${API}/knowledge/file`, { method: 'POST', body: formData });
+    const data = await resp.json();
+    if (data.success) {
+      showToast(`✅ ${file.name} 已上传，分块 ${data.chunk_count} 条`);
+      loadFileList();
+      loadKnowledgeSources();
+    } else {
+      showToast('❌ 上传失败：' + (data.detail || '未知错误'));
+    }
+  } catch(e) {
+    showToast('❌ 上传失败：' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '📁 上传文件';
+    input.value = '';
+  }
+}
+
+async function deleteKnowledgeFile(encodedPath) {
+  const filePath = decodeURIComponent(encodedPath);
+  if (!confirm(`确定要删除文件「${filePath}」吗？\n（知识库中对应内容也会被删除）`)) return;
+  try {
+    const resp = await fetch(`${API}/knowledge/files/${encodedPath}`, { method: 'DELETE' });
+    const data = await resp.json();
+    if (data.success) {
+      showToast(`✅ 文件已删除（清理 ${data.deleted_chunks || 0} 条知识块）`);
+      loadFileList();
+      loadKnowledgeSources();
+    } else {
+      showToast('❌ 删除失败：' + (data.detail || '未知错误'));
+    }
+  } catch(e) {
+    showToast('❌ 删除失败：' + e.message);
+  }
+}
+
+async function previewFile(encodedPath) {
+  const filePath = decodeURIComponent(encodedPath);
+  try {
+    const resp = await fetch(`${API}/knowledge/files/${encodedPath}/content`);
+    const data = await resp.json();
+    if (!data.success || !data.content) {
+      showToast('⚠️ ' + (data.message || '无法预览此文件'));
+      return;
+    }
+    const previewWin = window.open('', '_blank');
+    previewWin.document.write(`<pre style="padding:20px;font-family:monospace;white-space:pre-wrap;word-break:break-all">${escapeHtml(data.content)}</pre>`);
+    previewWin.document.title = filePath;
+  } catch(e) {
+    showToast('❌ 预览失败：' + e.message);
+  }
 }
 
 // HTML 转义
