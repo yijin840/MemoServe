@@ -1317,6 +1317,7 @@ function switchTab(tab) {
   document.getElementById('tab-search').classList.toggle('active', tab === 'search');
   document.getElementById('tab-files').classList.toggle('active', tab === 'files');
   document.getElementById('body-docs').style.display = tab === 'docs' ? '' : 'none';
+  if (tab === 'docs') loadDocList();
   document.getElementById('body-add').style.display = tab === 'add' ? '' : 'none';
   document.getElementById('body-search').style.display = tab === 'search' ? '' : 'none';
   if (tab === 'files') {
@@ -1587,6 +1588,7 @@ async function addText() {
       textEl.value = '';
       sourceEl.value = '';
       loadKnowledgeSources();
+      loadDocList();
     } else {
       showToast('❌ 添加失败：' + (data.detail || '未知错误'));
     }
@@ -1646,6 +1648,7 @@ async function searchAndAdd() {
 
       resultEl.innerHTML = html;
       loadKnowledgeSources();  // 刷新侧边栏知识库统计
+      loadDocList();           // 刷新模态框文档列表
       showToast(`✅ 已导入 ${data.imported_count} 条知识`);
     } else {
       resultEl.innerHTML = `<div style="text-align:center;padding:20px;color:#ef4444">❌ 导入失败</div>`;
