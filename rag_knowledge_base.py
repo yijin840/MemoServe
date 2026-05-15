@@ -44,9 +44,9 @@ class QwenEmbedding:
         self.model = QWEN_EMBEDDING_MODEL
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        """批量生成文本向量（每批最多 25 条）"""
+        """批量生成文本向量（每批最多 10 条）"""
         all_embeddings = []
-        batch_size = 25
+        batch_size = 10
         for i in range(0, len(texts), batch_size):
             batch = texts[i : i + batch_size]
             response = self.client.embeddings.create(

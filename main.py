@@ -187,88 +187,183 @@ def _check_search_relevance(keyword: str, title: str, content: str) -> bool:
     return len(matched) > 0
 
 
+def _extract_real_url(ddg_url: str) -> str:
+    """从 DuckDuckGo 重定向 URL 中提取真实目标 URL"""
+    if not ddg_url:
+        return ""
+    # 处理 //duckduckgo.com/l/?uddg=https%3A%2F%2F...
+    if "uddg=" in ddg_url:
+        from urllib.parse import urlparse, parse_qs
+        # 补全协议
+        if ddg_url.startswith("//"):
+            ddg_url = "https:" + ddg_url
+        parsed = urlparse(ddg_url)
+        qs = parse_qs(parsed.query)
+        if "uddg" in qs:
+            return qs["uddg"][0]
+    return ddg_url
+
+
+def _extract_page_content(html: str, url: str, min_paragraph_len: int = 20) -> str:
+    """从 HTML 中提取正文内容，保留文档结构"""
+    soup = BeautifulSoup(html, "html.parser")
+
+    # 移除无用元素
+    for tag in soup(["script", "style", "nav", "header", "footer", "aside",
+                     "noscript", "iframe", "form", "button", "svg",
+                     ".sidebar", ".menu", ".nav", ".footer", ".header",
+                     ".advertisement", ".ad", ".cookie", ".popup"]):
+        tag.decompose()
+
+    # 优先提取主要内容区域
+    main = (soup.find("article") or soup.find("main")
+            or soup.find("body"))
+    if not main:
+        return ""
+
+    lines = []
+    for tag in main.find_all(["p", "h1", "h2", "h3", "h4", "h5", "h6",
+                               "li", "pre", "blockquote", "td", "th"]):
+        text = tag.get_text(strip=True)
+        if not text or len(text) < min_paragraph_len:
+            continue
+        tag_name = tag.name
+        if tag_name.startswith("h"):
+            lines.append(f"\n## {text.strip()}")
+        elif tag_name == "pre":
+            lines.append(f"\n```\n{text.strip()}\n```")
+        elif tag_name in ("td", "th"):
+            # 表格内容用 | 分隔
+            row = tag.parent
+            if row and row.name == "tr":
+                cells = row.find_all(["td", "th"])
+                line = " | ".join(c.get_text(strip=True) for c in cells if c.get_text(strip=True))
+                if line:
+                    lines.append(line)
+        elif tag_name == "li":
+            lines.append(f"- {text.strip()}")
+        elif tag_name == "blockquote":
+            for line in text.strip().split("\n"):
+                lines.append(f"> {line.strip()}")
+        else:
+            lines.append(text.strip())
+
+    content = "\n\n".join(lines)
+    # 限制长度（避免 embedding batch 超限）
+    if len(content) > 4000:
+        content = content[:4000] + "\n\n...(内容过长已截断)"
+    return content.strip()
+
+
 async def search_and_fetch_content(keyword: str, max_results: int = 3) -> list[dict]:
     """
-    搜索关键词并抓取内容，自动过滤不相关结果
-    返回 [{"title": ..., "content": ..., "url": ...}, ...]
+    搜索关键词，抓取真实页面正文内容
+    1. 先用 DuckDuckGo 搜索获取结果列表（标题 + URL + 摘要）
+    2. 提取真实 URL
+    3. 逐页抓取 HTML 并提取正文
+    返回 [{"title": ..., "content": ..., "url": ..., "source_type": ...}, ...]
     """
     raw_results = []
 
     try:
-        # 1. 尝试 DuckDuckGo Instant Answer API
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            # ---------------- 1. DuckDuckGo 搜索 ----------------
+            # 优先用 DuckDuckGo Instant Answer API
             ddg_resp = await client.get(
                 "https://api.duckduckgo.com/",
-                params={
-                    "q": keyword,
-                    "format": "json",
-                    "no_html": "1",
-                    "skip_disambig": "1",
-                },
+                params={"q": keyword, "format": "json", "no_html": "1", "skip_disambig": "1"},
             )
             ddg_data = ddg_resp.json()
 
-            # 如果有 AbstractText（即时答案），直接使用
             if ddg_data.get("AbstractText"):
+                real_url = _extract_real_url(ddg_data.get("AbstractURL", ""))
                 raw_results.append({
                     "title": ddg_data.get("Heading", keyword),
                     "content": ddg_data["AbstractText"],
-                    "url": ddg_data.get("AbstractURL", ""),
+                    "url": real_url,
                     "source_type": "instant_answer",
                 })
 
-            # 如果有 RelatedTopics，也加入
+            # RelatedTopics
             for topic in (ddg_data.get("RelatedTopics") or [])[:max_results * 2]:
                 if isinstance(topic, dict) and topic.get("Text"):
+                    real_url = _extract_real_url(topic.get("FirstURL", ""))
                     raw_results.append({
                         "title": topic.get("Text", "")[:100],
                         "content": topic["Text"],
-                        "url": (topic.get("FirstURL") or ""),
+                        "url": real_url,
                         "source_type": "related_topic",
                     })
 
-            # 如果即时答案不够，用 HTML 搜索补充
+            # 用 HTML 搜索补充
             if len(raw_results) < max_results:
-                # 使用 DuckDuckGo HTML 搜索获取更多结果
                 html_resp = await client.get(
                     "https://html.duckduckgo.com/html/",
                     params={"q": keyword},
-                    headers={"User-Agent": "Mozilla/5.0"},
+                    headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"},
                 )
                 soup = BeautifulSoup(html_resp.text, "html.parser")
-
-                # 提取搜索结果链接
                 for result_div in soup.select(".result__body")[:max_results * 2]:
                     title_elem = result_div.select_one(".result__a")
                     snippet_elem = result_div.select_one(".result__snippet")
-
                     if title_elem:
-                        url = title_elem.get("href", "")
+                        url = _extract_real_url(title_elem.get("href", ""))
                         title = title_elem.get_text(strip=True)
                         snippet = snippet_elem.get_text(strip=True) if snippet_elem else ""
-
                         if url and title:
                             raw_results.append({
                                 "title": title,
-                                "content": f"{title}\n\n{snippet}",
+                                "content": snippet,
                                 "url": url,
                                 "source_type": "web_search",
                             })
-
     except Exception as e:
-        logger.error(f"搜索失败: {e}")
+        logger.error(f"[搜索] DuckDuckGo 搜索失败: {e}")
 
-    # 过滤不相关结果
-    results = []
+    # ---------------- 2. 过滤不相关 ----------------
+    filtered = []
     for item in raw_results:
         title = item.get("title", "")
-        content = item.get("content", "")
-        if _check_search_relevance(keyword, title, content):
-            results.append(item)
+        snippet = item.get("content", "")
+        if _check_search_relevance(keyword, title, snippet):
+            filtered.append(item)
         else:
             logger.warning(f"[搜索过滤] 丢弃不相关结果：{title[:60]}... (keyword={keyword})")
 
-    return results[:max_results]
+    # ---------------- 3. 逐页抓取真实内容 ----------------
+    results = []
+    for item in filtered[:max_results]:
+        try:
+            logger.info(f"[抓取] 开始抓取：{item['url'][:80]}...")
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as fetcher:
+                resp = await fetcher.get(
+                    item["url"],
+                    headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"},
+                )
+                if resp.status_code == 200:
+                    content_type = resp.headers.get("content-type", "")
+                    if "text/html" in content_type:
+                        body = _extract_page_content(resp.text, item["url"])
+                    else:
+                        body = item["content"]  # 非 HTML 用摘要
+                else:
+                    body = item["content"]  # 请求失败用摘要
+        except Exception as e:
+            logger.warning(f"[抓取] 请求失败 {item['url'][:60]}: {e}")
+            body = item["content"]  # 降级为摘要
+
+        if not body or len(body.strip()) < 50:
+            body = item["content"]  # 正文太短就用摘要
+
+        results.append({
+            "title": item["title"],
+            "content": body,
+            "url": item["url"],
+            "source_type": item.get("source_type", "web_search"),
+        })
+
+    logger.info(f"[搜索导入] 关键词「{keyword}」→ 搜索 {len(filtered)} 个相关结果，成功抓取 {len(results)} 页")
+    return results
 
 
 @app.post("/knowledge/search-and-add", tags=["知识库"])
