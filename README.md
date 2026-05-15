@@ -1,6 +1,6 @@
-# MemoServe — 多 Agent 智能客服系统
+# MemoServe — 智能客服系统
 
-> 基于 **mem0ai + 通义千问 (Qwen) + ChromaDB + RAG** 的多 Agent 智能客服系统  
+> 基于 **mem0ai + 通义千问 (Qwen) + ChromaDB + RAG** 的智能客服系统  
 > 支持 Web 对话、Telegram Bot 接入、知识库动态加载、跨会话用户记忆
 
 [![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
@@ -29,8 +29,9 @@
 
 ## 功能特性
 
-- **多 Agent 架构** — Router Agent 意图识别，自动路由到知识库 Agent 或商户 Agent
+- **意图分类 + 知识库问答** — IntentClassifier 识别意图（faq/greeting/unknown），KnowledgeAgent 处理知识库问答
 - **RAG 知识库问答** — ChromaDB 向量检索 + Qwen Embedding，支持动态加载知识库
+- **严格模式** — 知识库外的问题一律返回"不支持"，不编造；RAG 分数低于阈值时直接短路拒绝
 - **跨会话用户记忆** — mem0ai 持久化用户画像和对话历史，重启不丢失
 - **双模式回答缓存** — 精确匹配 + 语义相似度缓存，降低延迟和成本
 - **多渠道接入** — Web 界面（FastAPI）+ Telegram Bot 同时支持
@@ -44,7 +45,7 @@
 
 | 依赖 | 版本要求 | 说明 |
 |------|----------|------|
-| Python | ≥ 3.9 | 推荐 3.9+ |
+| Python | ≥ 3.9 | 推荐 3.9+（3.9 已测试） |
 | pip | 最新版 | 安装 Python 依赖 |
 | DashScope API Key | — | 阿里云通义千问 API Key（[获取地址](https://dashscope.aliyun.com/)） |
 | Telegram Bot Token | 可选 | 如需 Telegram Bot 接入，向 [@BotFather](https://t.me/BotFather) 申请 |
@@ -65,10 +66,10 @@ pip install -r requirements.txt
 ### 3. 配置环境变量
 
 ```bash
-cp .env.example .env
+cp config/.env.example config/.env
 ```
 
-编辑 `.env`，**必须填写** `DASHSCOPE_API_KEY`：
+编辑 `config/.env`，**必须填写** `DASHSCOPE_API_KEY`：
 
 ```env
 # 必填：阿里云 DashScope API Key
@@ -126,22 +127,21 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 ## 配置参数详解
 
-所有参数在 `.env` 文件中配置，以下按功能分组说明。
+所有参数在 `config/.env` 文件中配置，以下按功能分组说明。
 
 ### 一、Qwen / DashScope 配置
 
 | 参数名 | 默认值 | 说明 |
 |--------|--------|------|
 | `DASHSCOPE_API_KEY` | **必填，无默认值** | 阿里云 DashScope API Key。[获取地址](https://dashscope.aliyun.com/) |
-| `QWEN_MODEL` | `qwen-plus` | 对话使用的 Qwen 模型。`qwen-plus` / `qwen-turbo` / `qwen-max` 等，见 [DashScope 模型列表](https://help.aliyun.com/zh/model-studio/) |
+| `QWEN_MODEL` | `qwen-plus` | 对话使用的 Qwen 模型。`qwen-plus` / `qwen-turbo` / `qwen-max` 等 |
 | `QWEN_EMBEDDING_MODEL` | `text-embedding-v3` | Embedding 模型，用于 RAG 向量化。`text-embedding-v3` 是推荐值 |
-| `ROUTER_MODEL` | `qwen-plus` | Router Agent 意图分类使用的模型，可用更轻量的模型（如 `qwen-turbo`）降低成本 |
 
 ### 二、ChromaDB 配置
 
 | 参数名 | 默认值 | 说明 |
 |--------|--------|------|
-| `CHROMA_PERSIST_PATH` | `./data/chroma_db` | ChromaDB 数据持久化目录，重启不丢失 |
+| `CHROMA_PERSIST_PATH` | `<项目根>/data/chroma_db` | ChromaDB 数据持久化目录（基于项目根目录的绝对路径），重启不丢失 |
 | `CHROMA_COLLECTION_NAME` | `customer_service_kb` | 知识库向量数据的 Collection 名称 |
 | `CHROMA_MEMORY_COLLECTION` | `mem0_memory` | mem0 用户记忆的 Collection 名称 |
 
@@ -152,7 +152,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 | `RAG_TOP_K` | `5` | 每次检索返回 Top-K 个最相关文档片段 |
 | `RAG_CHUNK_SIZE` | `500` | 知识库文本分块大小（字符数），需大于 `RAG_CHUNK_OVERLAP` |
 | `RAG_CHUNK_OVERLAP` | `50` | 文本分块重叠字符数，保证上下文连贯 |
-| `RAG_SCORE_THRESHOLD` | `0.4` | RAG 检索最低相关度阈值（0~1）。**生产环境建议 0.6~0.7**，低于此值的检索结果不会被使用，避免乱答 |
+| `RAG_SCORE_THRESHOLD` | `0.55` | RAG 检索最低相关度阈值（0~1）。低于此值的检索结果不会被使用，**直接拒绝回答**，避免乱答 |
 
 ### 四、mem0 记忆配置
 
@@ -177,14 +177,15 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 |--------|--------|------|
 | `TELEGRAM_BOT_TOKEN` | 空 | Telegram Bot Token。向 [@BotFather](https://t.me/BotFather) 申请，不需要 Bot 可留空（Bot 不会启动） |
 
-### 七、回答缓存配置（当前被注释，需手动启用）
+### 七、回答缓存配置
 
 | 参数名 | 默认值 | 说明 |
 |--------|--------|------|
 | `ENABLE_ANSWER_CACHE` | `true`（代码中硬编码） | 是否启用回答缓存。启用后相同/相似问题直接返回缓存答案 |
 | `CACHE_TTL` | `3600` | 缓存过期时间（秒），默认 1 小时 |
+| `CACHE_SEMANTIC_THRESHOLD` | `0.92` | 语义缓存相似度阈值（0~1）。高于此值的相似问题命中缓存 |
 
-> ⚠️ 当前缓存代码被注释（`knowledge_agent.py` 第 222-228 行、381-389 行），启用需取消注释。见 [已知问题](#已知问题与待优化项)。
+> ⚠️ 当前缓存代码被注释（`knowledge_agent.py`），启用需取消注释。见 [已知问题](#已知问题与待优化项)。
 
 ### 八、生产安全配置（生产部署必改）
 
@@ -226,7 +227,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 | main 日志 | `logs/main.log` |
 | bot 日志 | `logs/bot.log` |
 
-> `.pids/` 和 `logs/` 目录会在首次运行时自动创建，建议加入 `.gitignore`。
+> `.pids/` 和 `logs/` 目录会在首次运行时自动创建，已加入 `.gitignore`。
 
 ---
 
@@ -235,23 +236,31 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 MemoServe/
 ├── main.py                  # FastAPI 入口，注册路由和生命周期
-├── router_agent.py          # Router Agent：意图识别 + 多 Agent 路由
-├── knowledge_agent.py       # 知识库 Agent：RAG 检索 + LLM 生成 + 记忆
-├── rag_knowledge_base.py   # RAG 知识库：ChromaDB + Qwen Embedding
-├── memory_manager.py       # mem0ai 记忆管理：用户画像 + 对话存档
-├── answer_cache.py         # 双模式回答缓存（精确 + 语义）
-├── telegram_bot.py        # Telegram Bot 接入
-├── config.py               # 全局配置，从 .env 加载
-├── prod_grounding_check.py # 生产加固：答案真实性校验
-├── requirements.txt       # Python 依赖清单
-├── run.sh                  # 服务管理脚本（start/stop/restart/status/logs）
-├── .env.example            # 环境变量模板
+├── config/
+│   ├── __init__.py          # 全局配置，从 config/.env 加载
+│   ├── .env                 # 环境变量（含 API Key 等敏感信息，已 gitignore）
+│   └── .env.example         # 环境变量模板
+├── router_agent.py          # IntentClassifier：LLM 意图分类（faq/greeting/unknown）
+├── knowledge_agent.py       # 知识库 Agent：RAG 检索 + LLM 生成 + 记忆保存
+├── rag_knowledge_base.py    # RAG 知识库：ChromaDB + Qwen Embedding
+├── memory_manager.py        # mem0ai 记忆管理：用户画像 + 对话存档
+├── answer_cache.py          # 双模式回答缓存（精确匹配 + 语义相似度）
+├── telegram_bot.py          # Telegram Bot 接入
+├── prod_grounding_check.py  # 生产加固：答案真实性校验
+├── requirements.txt         # Python 依赖清单
+├── run.sh                   # 服务管理脚本（start/stop/restart/status/logs）
 ├── static/
-│   └── index.html          # Web 聊天前端
+│   └── index.html           # Web 聊天前端
 ├── data/
-│   ├── chroma_db/          # ChromaDB 持久化数据（自动创建）
-│   └── knowledge/           # 知识库原始文件（.md/.txt/.pdf/.docx）
-└── logs/                   # 运行日志（自动创建，已加入 .gitignore）
+│   ├── chroma_db/           # ChromaDB 持久化数据（gitignore）
+│   └── knowledge/           # 知识库原始文件（.md/.txt/.pdf/.docx，保留版本控制）
+├── docs/                    # 项目文档
+│   ├── PROD_DEPLOY_PLAN.md
+│   ├── SYSTEM_REVIEW.md
+│   ├── TELEGRAM_SETUP.md
+│   ├── TEST_CASES.md
+│   └── ...
+└── logs/                    # 运行日志（自动创建，已 gitignore）
 ```
 
 ---
@@ -264,51 +273,35 @@ MemoServe/
 用户输入
    │
    ▼
-┌─────────────────────────────────────┐
-│         Router Agent                 │  ← 统一入口，意图识别
-│  · 关键词快速匹配（0ms，免 LLM）    │
-│  · LLM 兜底路由                    │
-│  · 支持多意图串行组合              │
-└────────────┬────────────────────────┘
-             │
-    ┌────────┴────────┐
-    ▼                 ▼
-KnowledgeAgent    (可扩展其他 Agent)
-(知识库 Agent)
-    │
-    ▼
-┌─────────────────────────────────────┐
-│  RAG 检索 → LLM 生成 → 记忆保存    │
-│  + 回答缓存（启用时）               │
-└─────────────────────────────────────┘
+┌──────────────────────────────────────┐
+│     IntentClassifier                 │  ← 统一入口，意图分类
+│  · 纯寒暄快速路径（≤10 词，免 LLM）  │
+│  · LLM 多意图分类（faq/greeting/…）  │
+│  · 支持扩展自定义意图                 │
+└──────────────┬───────────────────────┘
+               │
+       ┌───────┴───────┐
+       ▼               ▼
+  FAQ 意图        greeting/unknown
+       │                │
+       ▼                ▼
+┌────────────────┐  ┌──────────────────┐
+│ KnowledgeAgent │  │  直接返回预设    │
+│ RAG → LLM      │  │  问候语/兜底文本 │
+│ → 记忆保存     │  │  （不调 LLM）    │
+│ + 缓存可选     │  │                  │
+└────────────────┘  └──────────────────┘
 ```
 
 ### 意图分类说明
 
-Router Agent 支持以下意图：
-
 | 意图 | 说明 | 处理方式 |
 |------|------|----------|
-| `faq` | 常见问题 | 走 KnowledgeAgent（RAG + 记忆） |
-| `greeting` | 问候语 | 直接返回预设响应，不调 LLM |
-| `crypto_topup` | 稳定币充值 | 走 KnowledgeAgent，可扩展专有知识库 |
-| `technical_concept` | 技术概念解释 | 走 KnowledgeAgent，可扩展直连 LLM |
+| `faq` | 常见知识库问题 | 走 KnowledgeAgent（RAG 检索 + LLM 生成 + 记忆保存） |
+| `greeting` | 问候语 | 快速路径：词库匹配直接返回，不调 LLM；LLM 兜底分类 |
 | `unknown` | 无法识别 | 返回兜底回答，建议转人工 |
 
-### 多意图串行处理
-
-当用户一句话包含多个意图时，Router Agent 会串行调用多个 Agent，结果自动合并：
-
-```
-用户：「查一下我的订单，顺便问退货政策」
-         ↓
-  Router 识别 → ["merchant", "knowledge"]
-         ↓
-  [1] MerchantAgent.chat()  →  "您的订单已发货"
-  [2] KnowledgeAgent.chat() →  "退货政策：7天无理由..."
-         ↓
-  合并答案 → "您的订单已发货\n\n退货政策：7天无理由..."
-```
+> 未来扩展：只需在 `IntentClassifier.valid_intents` 添加新意图名称（如 `"business"`），分类器会自动识别并路由，无需改其他代码。
 
 ---
 
@@ -324,7 +317,7 @@ Router Agent 支持以下意图：
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
   -d '{
-    "message": "如何退款？",
+    "message": "如何对接API？",
     "user_id": "user_001",
     "history": []
   }'
@@ -334,41 +327,39 @@ curl -X POST http://localhost:8000/chat \
 
 ```json
 {
-  "answer": "7天无理由退款，请联系客服处理。",
+  "answer": "API 对接文档请参考 https://docs.pay-crypto.com...",
   "rag_sources": [
     {
-      "text": "退款政策：7天无理由退款...",
-      "source": "退款政策.txt",
+      "text": "API 对接流程：1. 注册账号 2. 获取 API Key 3. 调用接口...",
+      "source": "FAQ.md",
       "score": 0.82
     }
   ],
-  "memories_used": [
-    {
-      "text": "用户偏好：希望快速退款",
-      "score": 0.75
-    }
-  ],
+  "memories_used": [...],
   "model": "qwen-plus",
-  "routed_to": ["knowledge"]
+  "intents": ["faq"]
 }
 ```
 
 #### GET `/chat/stream` — 流式对话（SSE）
 
 ```bash
-curl "http://localhost:8000/chat/stream?message=如何退款&user_id=user_001"
+curl "http://localhost:8000/chat/stream?message=如何对接API&user_id=user_001"
 ```
 
 返回 `text/event-stream` 格式的 SSE 流，逐 token 返回答案。
 
+#### GET `/chat/classify` — 意图分类（调试用）
+
+```bash
+curl "http://localhost:8000/chat/classify?message=你好"
+```
+
+返回类似 `{"intents": ["greeting"], "method": "fast_path"}`。
+
 ### 知识库管理接口
 
 ```bash
-# 添加文本到知识库
-curl -X POST http://localhost:8000/knowledge/add \
-  -H "Content-Type: application/json" \
-  -d '{"text": "退款政策：7天无理由退款。", "source": "退款政策.txt"}'
-
 # 上传文件（.txt / .md / .pdf / .docx）
 curl -X POST http://localhost:8000/knowledge/file \
   -F "file=@/path/to/document.pdf"
@@ -376,8 +367,11 @@ curl -X POST http://localhost:8000/knowledge/file \
 # 查看知识库中的所有来源
 curl http://localhost:8000/knowledge/list
 
+# 查看知识库统计
+curl http://localhost:8000/health
+
 # 删除指定来源的所有文档
-curl -X DELETE http://localhost:8000/knowledge/退款政策.txt
+curl -X DELETE http://localhost:8000/knowledge/FAQ.md
 ```
 
 ### 记忆管理接口
@@ -386,8 +380,18 @@ curl -X DELETE http://localhost:8000/knowledge/退款政策.txt
 # 查看用户的记忆
 curl http://localhost:8000/memory/user_001
 
-# 清除用户的所有记忆
+# 清除用户的所有记忆（两步确认，前端需二次点击）
 curl -X DELETE http://localhost:8000/memory/user_001
+```
+
+### 缓存管理接口
+
+```bash
+# 查看缓存统计
+curl http://localhost:8000/cache/stats
+
+# 清除用户的缓存
+curl -X DELETE "http://localhost:8000/cache?user_id=user_001"
 ```
 
 ---
@@ -433,7 +437,7 @@ curl -X POST http://localhost:8000/knowledge/file -F "file=@your_document.md"
 1. 在 Telegram 中打开 [@BotFather](https://t.me/BotFather)
 2. 发送 `/newbot`，按提示设置用户名
 3. 获得 Bot Token（形如 `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`）
-4. 将 Token 填入 `.env` 的 `TELEGRAM_BOT_TOKEN`
+4. 将 Token 填入 `config/.env` 的 `TELEGRAM_BOT_TOKEN`
 
 ### 2. 启动 Bot
 
@@ -546,15 +550,15 @@ sudo systemctl status memoserve
 
 #### 问题 1：回答缓存被禁用
 
-**位置：** `knowledge_agent.py` 第 222-228 行（读缓存）、第 381-389 行（写缓存）
+**位置：** `knowledge_agent.py` `chat()` 和 `stream_chat()` 方法中
 
 **影响：** 每个问题都走完整 RAG 检索 + LLM 调用，延迟高、Token 成本高。
 
-**修复：** 取消相关代码注释，重新启用缓存。
+**修复：** 取消相关代码注释，重新启用缓存。缓存模块 `answer_cache.py` 已实现（精确匹配 + 语义相似度），只需在 KnowledgeAgent 中接入。
 
 #### 问题 2：`GROUP_USER_MAP` 不持久化
 
-**位置：** `telegram_bot.py` 第 31 行
+**位置：** `telegram_bot.py` 全局变量
 
 ```python
 GROUP_USER_MAP: dict[str, str] = {}  # ⚠️ 仅内存，重启丢失
@@ -562,7 +566,7 @@ GROUP_USER_MAP: dict[str, str] = {}  # ⚠️ 仅内存，重启丢失
 
 **影响：** Bot 重启后所有群的 `/setid` 绑定丢失。
 
-**修复：** 改为 JSON 文件读写（见 `PROD_DEPLOY_PLAN.md` 第四节）。
+**修复：** 改为 JSON 文件读写（见 `docs/PROD_DEPLOY_PLAN.md` 第四节）。
 
 #### 问题 3：流式模式不保存记忆
 
@@ -570,7 +574,7 @@ GROUP_USER_MAP: dict[str, str] = {}  # ⚠️ 仅内存，重启丢失
 
 **影响：** 使用 SSE 流式对话的用户，其对话不会被记录到 mem0 记忆中。
 
-**修复：** 在 `stream_chat()` 末尾补充记忆保存逻辑（见 `PROD_DEPLOY_PLAN.md` 第三节）。
+**修复：** 在 `stream_chat()` 末尾补充记忆保存逻辑（见 `docs/PROD_DEPLOY_PLAN.md` 第三节）。
 
 ### 🟡 中优先级
 
@@ -580,7 +584,7 @@ GROUP_USER_MAP: dict[str, str] = {}  # ⚠️ 仅内存，重启丢失
 
 **建议：** 复杂格式知识库输出时先转为纯文本，或限制知识库输出格式。
 
-#### 问题 5：`config.py` 缺少阈值合理性校验
+#### 问题 5：`config/__init__.py` 缺少阈值合理性校验
 
 `RAG_SCORE_THRESHOLD`、`MEM0_SCORE_THRESHOLD` 等值若为非法值（如 >1 或 <0），启动时不会报错。
 
@@ -588,9 +592,9 @@ GROUP_USER_MAP: dict[str, str] = {}  # ⚠️ 仅内存，重启丢失
 
 ### 🟢 优化建议
 
-- **意图后处理：** `crypto_topup` 和 `technical_concept` 可路由到专有知识库子集，减少无关检索
 - **ChromaDB 分离：** 知识库和对话存档可使用不同的 ChromaDB 实例
 - **监控指标：** 增加 Prometheus / OpenTelemetry 指标（对话耗时、意图分布、缓存命中率）
+- **知识库热加载增强：** 当前仅支持 API 单文件上传，可增加批量导入 / Git 仓库同步
 
 ---
 
@@ -608,7 +612,7 @@ cat logs/main.log
 cat logs/bot.log
 
 # 常见原因：
-# 1. DASHSCOPE_API_KEY 未配置 → 填写 .env
+# 1. DASHSCOPE_API_KEY 未配置 → 填写 config/.env
 # 2. 端口被占用 → 修改 APP_PORT 或 kill 占用进程
 # 3. ChromaDB 目录无写入权限 → chmod 755 data/chroma_db
 ```
@@ -620,7 +624,7 @@ cat logs/bot.log
 curl http://localhost:8000/knowledge/list
 
 # 检查 RAG_SCORE_THRESHOLD 是否过高
-# 在 .env 中调低 RAG_SCORE_THRESHOLD 后重启
+# 在 config/.env 中调低 RAG_SCORE_THRESHOLD 后重启
 ```
 
 ### Bot 不响应群聊消息
@@ -634,7 +638,7 @@ curl http://localhost:8000/knowledge/list
 ChromaDB 默认将所有向量加载到内存。若知识库很大：
 
 ```env
-# 在 .env 中配置 ChromaDB 使用磁盘 + 内存混合模式
+# 在 config/.env 中配置 ChromaDB 使用磁盘 + 内存混合模式
 # （需要升级 ChromaDB 版本，或使用远程 ChromaDB）
 ```
 
@@ -644,10 +648,10 @@ ChromaDB 默认将所有向量加载到内存。若知识库很大：
 
 | 文档 | 说明 |
 |------|------|
-| [PROD_DEPLOY_PLAN.md](PROD_DEPLOY_PLAN.md) | 生产部署完整方案（防止乱答、动态加载、记忆持久化、用户认证） |
-| [SYSTEM_REVIEW.md](SYSTEM_REVIEW.md) | 系统完整审查报告（架构、已修复问题、剩余问题清单） |
-| [TELEGRAM_SETUP.md](TELEGRAM_SETUP.md) | Telegram Bot 详细配置指南 |
-| [TEST_CASES.md](TEST_CASES.md) | 测试用例报告 |
+| [docs/PROD_DEPLOY_PLAN.md](docs/PROD_DEPLOY_PLAN.md) | 生产部署完整方案（防止乱答、动态加载、记忆持久化、用户认证） |
+| [docs/SYSTEM_REVIEW.md](docs/SYSTEM_REVIEW.md) | 系统完整审查报告（架构、已修复问题、剩余问题清单） |
+| [docs/TELEGRAM_SETUP.md](docs/TELEGRAM_SETUP.md) | Telegram Bot 详细配置指南 |
+| [docs/TEST_CASES.md](docs/TEST_CASES.md) | 测试用例报告 |
 
 ---
 
