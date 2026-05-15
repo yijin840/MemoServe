@@ -10,7 +10,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PID_DIR="$SCRIPT_DIR/.pids"
 LOG_DIR="$SCRIPT_DIR/logs"
-ENV_FILE="$SCRIPT_DIR/.env"
+ENV_FILE="$SCRIPT_DIR/config/.env"
 
 # ---- 进程定义 ----
 # main.py -> uvicorn FastAPI

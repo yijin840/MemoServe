@@ -6,12 +6,12 @@ import logging
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+# ====================== 项目根目录 ======================
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+load_dotenv(str(_PROJECT_ROOT / "config" / ".env"))
 
 logger = logging.getLogger(__name__)
-
-# ====================== 项目根目录 ======================
-_PROJECT_ROOT = Path(__file__).resolve().parent
 
 # ====================== Qwen / DashScope ======================
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")

@@ -26,7 +26,11 @@ venv/
 Thumbs.db
 
 # ChromaDB 数据
-data/
+data/chroma_db/
+data/embeddings/
+
+# 但保留知识库上传目录
+!data/knowledge/
 
 # 日志
 *.log
@@ -40,3 +44,5 @@ logs/
 .coverage
 htmlcov/
 main.pid
+
+# 知识库文件管理
