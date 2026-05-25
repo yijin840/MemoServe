@@ -1,328 +1,120 @@
-# ============================================================
-# PayCrypto API 智能客服系统
-# ============================================================
-#
-# 项目简介
-# ----------
-# 基于 RAG（检索增强生成）的 API 文档智能问答系统。
-# 支持多 Agent 架构：意图分类 → 知识库 Agent / 业务 Agent。
-# 内置文档检索（TF-IDF 关键词 + 可选 Chroma 向量检索）、
-# 会话记忆（simple_memory / mem0）、自主学习（经验模式提炼）等功能。
-#
-# 适用场景
-# ----------
-# - API 文档智能问答（技术支持机器人）
-# - 企业内部知识库问答
-# - 需要结合文档检索 + LLM 的客服场景
-#
-# 技术栈
-# ----------
-# - 后端：Python 3.9+ / FastAPI / Uvicorn
-# - 前端：原生 HTML + CSS + Vanilla JS（无框架依赖）
-# - LLM：OpenAI 兼容接口（支持 OpenAI / DeepSeek / 智谱 等）
-# - 向量检索：ChromaDB + sentence-transformers（可选）
-# - 部署：单机运行，无需 Docker
-#
-# ============================================================
-
-
-# ------------------------------------------------------------
-# 1. 系统架构
-# ------------------------------------------------------------
-
-# 多 Agent 架构设计：
-
-#                    ┌─────────────────────┐
-#                    │   前端 (浏览器)      │
-#                    │  static/index.html  │
-#                    └─────────┬───────────┘
-#                              │ HTTP / JSON
-#                              ▼
-#                    ┌─────────────────────┐
-#                    │   FastAPI 路由层     │
-#                    │  server.py /api/ask │
-#                    └─────────┬───────────┘
-#                              │
-#                  ┌───────────┴────────────┐
-#                  │   意图分类 (classify_intent)  │
-#                  └───────────┬────────────┘
-#               ┌───────┬───────┬──────────┬────────┐
-#               ▼       ▼       ▼          ▼        ▼
-#            greeting  info   unknown   business  knowledge
-#                                  │          │
-#                            ┌─────┴─────┐  ┌───┴──────────┐
-#                            │  biz_agent  │  │  kb_agent       │
-#                            │  (占位实现)  │  │  Customer-    │
-#                            └────────────┘  │  ServiceAgent   │
-#                                            └────┬──────────┘
-#                                                 │
-#                              ┌──────────────────┼──────────────┐
-#                              ▼                  ▼              ▼
-#                         RAG 检索        记忆检索        LLM 调用
-#                        (rag_store)      (simple_      (call_ai_api)
-#                                            memory)
-
-
-# 核心模块说明：
-
-# server.py         — FastAPI 应用入口，路由定义，AI API 配置管理
-# agent.py           — 文档检索协调层，DSPy 优化模块（可选）
-# agents/
-#   __init__.py     — Agent 包导出
-#   kb_agent.py      — 知识库 Agent（CustomerServiceAgent）
-#   biz_agent.py     — 业务 Agent（占位，待对接真实 API）
-# doc_loader.py      — Markdown 文档加载器，按标题切块
-# rag_store.py       — RAG 检索层（TF-IDF 降级 / Chroma 向量检索）
-# obsidian_writer.py — 问答日志、经验模式写入 Obsidian vault
-# simple_memory.py   — 本地轻量记忆管理（sentence-transformers）
-# mem0_manager.py   — mem0 记忆管理（可选，需 API 兼容）
-# web_crawler.py    — 搜索导入爬虫（DuckDuckGo + BS4）
-# regression_test.py — 回归测试脚本
-# static/
-#   index.html       — 前端单页应用（聊天界面）
-
-
-# ------------------------------------------------------------
-# 2. 功能特性
-# ------------------------------------------------------------
-
-# [x] 多 Agent 意图分类（greeting / info_provide / knowledge / business / unknown）
-# [x] RAG 文档检索（TF-IDF 关键词 + Chroma 向量检索可选）
-# [x] 支持多种 LLM 提供商（OpenAI / DeepSeek / 智谱 / 自定义兼容接口）
-# [x] 会话记忆（按 user_id 隔离，支持 simple_memory 或 mem0）
-# [x] 自主学习（自动提炼经验模式到 patterns.json）
-# [x] 文档动态导入（URL 下载 / 本地上传 / 搜索导入）
-# [x] 前端 Markdown 渲染（标题 / 加粗 / 代码块 / 表格 / 引用）
-# [x] 多轮对话支持（按 session_id 隔离历史）
-# [x] 回归测试脚本
-# [x] 日志自动清理（超过 30 天自动删除）
-
-
-# ------------------------------------------------------------
-# 3. 项目结构
-# ------------------------------------------------------------
-
-# dspy/
-# ├── server.py              # FastAPI 入口
-# ├── agent.py               # 检索协调 + DSPy 优化
-# ├── agents/
-# │   ├── __init__.py
-# │   ├── kb_agent.py       # 知识库 Agent
-# │   └── biz_agent.py     # 业务 Agent
-# ├── doc_loader.py         # 文档加载 + 切块
-# ├── rag_store.py          # RAG 检索层
-# ├── obsidian_writer.py    # Obsidian 日志写入
-# ├── simple_memory.py      # 本地记忆管理
-# ├── mem0_manager.py       # mem0 管理器（可选）
-# ├── web_crawler.py        # 搜索导入爬虫
-# ├── regression_test.py     # 回归测试
-# ├── requirements.txt       # Python 依赖
-# ├── api_config.json       # AI 配置（不提交，见 .gitignore）
-# ├── memory_store.json     # 本地记忆存储（不提交）
-# ├── docs_cache/           # 文档缓存（不提交）
-# ├── chroma_db/            # Chroma 向量库（不提交）
-# ├── mem0_db/              # mem0 数据库（不提交）
-# ├── obsidian_vault/       # Obsidian vault（不提交）
-# └── static/
-#     └── index.html        # 前端页面
-
-
-# ------------------------------------------------------------
-# 4. 安装部署
-# ------------------------------------------------------------
-
-# 4.1 环境要求
-#   - Python 3.9+
-#   - pip / venv
-
-# 4.2 安装依赖
-#   $ cd /path/to/dspy
-#   $ pip3 install -r requirements.txt
-
-# 4.3 配置 AI API
-#   复制配置模板（如有），或首次启动后通过前端「AI 设置」页面配置：
-#
-#   {
-#     "provider": "custom",
-#     "api_key": "YOUR_API_KEY_HERE",
-#     "base_url": "https://your-api-endpoint/v1",
-#     "model": "your-model-name",
-#     "temperature": 0.7,
-#     "max_tokens": 2048,
-#     "top_p": 1.0,
-#     "enabled": true
-#   }
-#
-#   支持的 provider：openai / anthropic / siliconflow / deepseek / qwen / zhipu / custom
-
-# 4.4 启动服务
-#   $ python3 server.py
-#   访问：http://localhost:8000
-
-# 4.5 可选：启用向量检索
-#   $ pip3 install chromadb sentence-transformers
-#   重启服务即可自动启用 Chroma 向量检索
-
-
-# ------------------------------------------------------------
-# 5. 配置说明（api_config.json）
-# ------------------------------------------------------------
-
-# 字段名           类型      说明
-# provider         str       提供商：openai / anthropic / siliconflow / deepseek / qwen / zhipu / custom
-# api_key          str       API 密钥（勿提交到 git）
-# base_url         str       自定义 API 地址（provider=custom 时必填）
-# model            str       模型名称
-# temperature      float    温度参数，0.0-2.0，默认 0.7
-# max_tokens       int      最大输出 token 数，默认 2048
-# top_p            float    nucleus sampling，0.0-1.0，默认 1.0
-# frequency_penalty  float  频率惩罚，默认 0.0
-# presence_penalty   float  存在惩罚，默认 0.0
-# enabled          bool     是否启用 AI，默认 false
-# system_prompt    str       自定义 system prompt（可选）
-
-
-# ------------------------------------------------------------
-# 6. API 接口文档
-# ------------------------------------------------------------
-
-# POST /api/ask
-#   请求体：{"question": "用户问题", "session_id": "会话ID"}
-#   响应体：{
-#     "answer": "回答内容",
-#     "source": "ai",
-#     "doc_hits": 10,
-#     "confidence": 0.8,
-#     "chunks_used": [{"title_path": "...", "score": 15.2, "content": "..."}],
-#     "method": "keyword"
-#   }
-
-# GET  /api/health
-#   响应体：{"status": "ok", "rag_enabled": true, "doc_chunks": 115, ...}
-
-# GET  /api/config
-
-# POST /api/config
-
-# POST /api/config/test
-
-# POST /api/docs/import
-
-# POST /api/docs/upload
-
-# POST /api/docs/crawl
-
-# DELETE /api/docs/remove?name=...
-
-# DELETE /api/docs/reset
-
-# GET  /api/patterns
-
-# POST /api/summary
-
-# DELETE /api/patterns/{pattern_id}
-
-# GET  /api/vault/files
+# mem0-demo 智能客服系统
+
+基于 RAG（检索增强生成）的 API 文档智能问答系统，支持多意图路由、mem0 记忆管理、7 种 AI 提供商。
+
+**线上地址：** [GitHub](https://github.com/yijin840/mem0-demo)
+
+---
+
+## 架构
+
+```
+用户提问 → server.py (/api/ask) → classify_intent() → greeting / unknown / business / knowledge
+                                                              │
+                                    ┌─────────────────────────┤
+                                    ▼                         ▼
+                              硬编码/引导语              知识库 Agent (kb_agent)
+                                                            │
+                                    ┌───────────────────────┼──────────────────┐
+                                    ▼                       ▼                  ▼
+                                RAG检索 (rag_store)    记忆召回 (mem0)     LLM 生成 (call_ai_api)
+```
+
+---
+
+## 项目结构
+
+```
+mem0-demo/
+├── server.py              # FastAPI 入口
+├── src/
+│   ├── agent.py           # 检索协调 + DSPy 优化
+│   ├── doc_loader.py      # 文档加载切块
+│   ├── rag_store.py       # RAG 检索（TF-IDF + ChromaDB）
+│   ├── mem0_manager.py    # mem0 记忆管理
+│   ├── simple_memory.py   # 本地记忆（备选方案）
+│   ├── obsidian_writer.py # 日志/经验写入
+│   ├── web_crawler.py     # 搜索导入爬虫
+│   ├── dspy_rag_optimizer.py
+│   └── agents/
+│       ├── kb_agent.py    # 知识库 Agent
+│       └── biz_agent.py   # 业务 Agent（占位）
+├── static/
+│   └── index.html         # 前端单页应用
+├── docs/                  # 项目文档
+│   ├── 多Agent架构设计.md
+│   ├── 真实测试用例集.md
+│   ├── 问题清单.md
+│   ├── 项目总结.md
+│   └── 部署文档.md
+├── tests/
+│   └── regression_test.py # 回归测试
+├── data/knowledge/        # 知识库文档（热加载）
+├── requirements.txt
+└── api_config.json        # AI 配置（gitignored）
+```
+
+---
+
+## 快速开始
+
+**环境要求：** Python 3.9+
+
+```bash
+pip install -r requirements.txt
+python3 server.py
+# 访问 http://localhost:8000
+```
+
+通过前端左侧栏 ⚙️ **AI 设置** 配置 API Key（支持 7 种提供商：OpenAI / Anthropic / DeepSeek / 通义千问 / 智谱 / 硅基流动 / 自定义）。
+
+---
+
+## API 接口
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/ask` | 核心问答接口 |
+| GET | `/api/health` | 健康检查 |
+| GET/POST | `/api/config` | AI 配置读写 |
+| POST | `/api/config/test` | 测试 AI 连接 |
+| POST | `/api/docs/import` | 导入文档URL |
+| POST | `/api/docs/upload` | 上传文件 |
+| POST | `/api/docs/crawl` | 搜索导入 |
+| DELETE | `/api/docs/remove` | 删除文档 |
+| DELETE | `/api/docs/reset` | 重置文档 |
+
+---
+
+## 运行数据
+
+| 指标 | 数值 |
+|------|------|
+| 知识库 | 115 个文档块 |
+| 经验模式 | 61 条 |
+| AI 提供商 | 7 种 |
+| API 接口 | 20 个 |
+| 版本 | v4.0.0 |
+
+---
+
+## 测试
 
-# GET  /api/vault/read?folder=...&name=...
+```bash
+python3 -B tests/regression_test.py
+```
 
-# DELETE /api/vault/delete?folder=...&name=...
+覆盖单轮意图分类（10 例）+ 多轮对话（8 轮），共 18 个用例。
 
+---
 
-# ------------------------------------------------------------
-# 7. 前端使用说明
-# ------------------------------------------------------------
+## 已知问题
 
-# - 打开 http://localhost:8000
-# - 在输入框输入 API 相关问题，回车发送
-# - 侧边栏可查看文档管理、AI 设置
-# - 快捷提问按钮可快速测试常见场景
-# - 消息气泡下方显示：来源标签、文档命中数、检索方式、置信度
+- BUG-02：文档中 HMAC 时间戳单位不一致（毫秒 vs 秒），已加 Prompt 约束
+- 英文提问：DeepSeek 模型对中文知识库有强中文倾向，英文回答需换模型
 
+---
 
-# ------------------------------------------------------------
-# 8. 测试
-# ------------------------------------------------------------
+## License
 
-# 运行回归测试（需先启动服务）：
-#   $ python3 regression_test.py
-
-# 测试覆盖：
-# - 单轮意图分类（greeting / knowledge / unknown / business）
-# - 多轮对话上下文记忆
-# - 文档检索命中率
-# - API 接口连通性
-
-
-# ------------------------------------------------------------
-# 9. 开发说明
-# ------------------------------------------------------------
-
-# 文档切块逻辑：doc_loader.py → split_markdown()
-#   - 按 Markdown 标题（## / ###）切分
-#   - 每块不超过 max_chars（默认 1200）字符
-#   - 超长块按段落（\n\n）二次切分
-
-# RAG 检索逻辑：rag_store.py → search_docs()
-#   - 优先 Chroma 向量检索（若依赖已安装）
-#   - 降级为 TF-IDF 关键词检索
-
-# 意图分类逻辑：agents/kb_agent.py → classify_intent()
-#   - 关键词规则匹配
-#   - 返回：greeting / info_provide / knowledge / business / unknown
-
-# 会话记忆：simple_memory.py
-#   - 使用 sentence-transformers 本地模型向量化
-#   - 按 user_id 隔离存储到 memory_store.json
-#   - 可选替换为 mem0（需 API 兼容）
-
-
-# ------------------------------------------------------------
-# 10. 注意事项 / 已知问题
-# ------------------------------------------------------------
-
-# [!] api_config.json 包含 API Key，已加入 .gitignore，请勿手动提交
-# [!] memory_store.json / obsidian_vault/ 包含会话数据，已加入 .gitignore
-# [!] chroma_db/ / mem0_db/ 为本地向量库，已加入 .gitignore
-# [!] 使用第三方兼容 API 时，请注意其是否支持 top_p 参数
-# [!] mem0 需要 OpenAI 格式嵌入接口，部分第三方 API 不兼容
-
-# 已知问题（BUG）：
-# - BUG-02：文档中 HMAC 时间戳单位描述不一致（毫秒 vs 秒），已加 Prompt 约束
-# - BUG-03：mem0 与部分第三方 API 不兼容（已降级为 simple_memory）
-
-
-# ------------------------------------------------------------
-# 11. 版本历史
-# ------------------------------------------------------------
-
-# v4.0.0  (2026-05-25)
-#   - 多 Agent 架构重构（意图分类 + 子 Agent 路由）
-#   - 修复 Markdown h4 渲染缺失
-#   - 修复表格 HTML 转义问题
-#   - 增加 MAX_RAG_CHARS 预算控制
-#   - 增加时间戳单位 Prompt 约束
-
-# v3.0.0  (2026-05-XX)
-#   - 接入真实 LLM API（替代模拟回答）
-#   - 支持多提供商配置
-#   - 前端 UI 重构
-
-# v2.0.0  (2026-05-XX)
-#   - 加入 RAG 检索
-#   - 加入文档动态导入
-
-# v1.0.0  (2026-04-XX)
-#   - 初始版本，基础问答功能
-
-
-# ------------------------------------------------------------
-# 12. License
-# ------------------------------------------------------------
-
-# MIT License
-
-
-# ============================================================
-# 文档结束
-# ============================================================
+MIT
