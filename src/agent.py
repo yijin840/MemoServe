@@ -14,9 +14,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from doc_loader import load_all_docs, get_chunks, refresh_docs
-from rag_store import search_docs, sync_chunks_to_vector, CHROMA_OK
-from obsidian_writer import (
+from src.doc_loader import load_all_docs, get_chunks, refresh_docs
+from src.rag_store import search_docs, sync_chunks_to_vector, CHROMA_OK
+from src.obsidian_writer import (
     log_qa, upsert_pattern, get_all_patterns,
     search_patterns_by_keyword, write_summary, cleanup_old_logs,
 )

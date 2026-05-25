@@ -25,11 +25,11 @@ from dotenv import load_dotenv
 # 加载 .env
 load_dotenv()
 
-from agent import generate_summary, startup as agent_startup, DSPY_AVAILABLE
-from doc_loader import get_chunks, refresh_docs, import_doc, remove_doc, reset_docs, upload_doc, get_all_sources
-from obsidian_writer import get_all_patterns, delete_pattern, VAULT_ROOT
-from rag_store import CHROMA_OK
-from web_crawler import crawl_and_import
+from src.agent import generate_summary, startup as agent_startup, DSPY_AVAILABLE
+from src.doc_loader import get_chunks, refresh_docs, import_doc, remove_doc, reset_docs, upload_doc, get_all_sources
+from src.obsidian_writer import get_all_patterns, delete_pattern, VAULT_ROOT
+from src.rag_store import CHROMA_OK
+from src.web_crawler import crawl_and_import
 
 app = FastAPI(title="API Doc QA Bot", version="3.0.0")
 
@@ -40,7 +40,7 @@ _kb_agent = None
 def _get_agent():
     global _kb_agent
     if _kb_agent is None:
-        from agents.kb_agent import CustomerServiceAgent
+        from src.agents.kb_agent import CustomerServiceAgent
         _kb_agent = CustomerServiceAgent()
     return _kb_agent
 
@@ -300,8 +300,8 @@ async def api_ask(req: AskRequest):
     if not config.get("enabled") or not config.get("api_key"):
         return AskResponse(answer="未配置 AI", source="error", doc_hits=0, confidence=0, chunks_used=[], method="none")
 
-    from agents.kb_agent import classify_intent
-    from agents.biz_agent import handle as biz_handle
+    from src.agents.kb_agent import classify_intent
+    from src.agents.biz_agent import handle as biz_handle
 
     intent = classify_intent(req.question)
 

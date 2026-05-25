@@ -9,7 +9,7 @@ import httpx
 from datetime import date
 from bs4 import BeautifulSoup
 from pathlib import Path
-from doc_loader import upload_doc
+from src.doc_loader import upload_doc
 
 SEARCH_URL = "https://lite.duckduckgo.com/lite/"
 MAX_RESULTS = 5
