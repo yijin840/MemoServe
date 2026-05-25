@@ -7,9 +7,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # ====================== 项目根目录 ======================
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
-load_dotenv(str(_PROJECT_ROOT / "config" / ".env"))
+load_dotenv(str(_PROJECT_ROOT / ".env"))
 
 logger = logging.getLogger(__name__)
 

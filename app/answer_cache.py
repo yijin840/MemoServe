@@ -13,7 +13,7 @@ import logging
 import time
 from typing import Optional
 
-from config import (
+from .config import (
     DASHSCOPE_API_KEY,
     QWEN_BASE_URL,
     QWEN_EMBEDDING_MODEL,

@@ -14,7 +14,7 @@ from typing import Optional, AsyncIterator
 
 from openai import OpenAI
 
-from config import DASHSCOPE_API_KEY, QWEN_MODEL, QWEN_BASE_URL
+from .config import DASHSCOPE_API_KEY, QWEN_MODEL, QWEN_BASE_URL
 
 logger = logging.getLogger(__name__)
 

@@ -1,9 +1,9 @@
 # =============================================================================
-# PayCrypto API 智能客服系统 - Docker 镜像
+# mem0-demo 智能客服系统 - Docker 镜像
 # =============================================================================
 # 使用方法:
-#   构建: docker build -t paycrypto-cs:latest .
-#   运行: docker run -d -p 8000:8000 --env-file .env paycrypto-cs:latest
+#   构建: docker build -t mem0-demo:latest .
+#   运行: docker run -d -p 8000:8000 --env-file .env mem0-demo:latest
 # =============================================================================
 
 FROM python:3.9-slim
@@ -35,7 +35,7 @@ EXPOSE 8000
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8000/api/health || exit 1
+    CMD curl -f http://localhost:8000/health || exit 1
 
 # 启动命令
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]

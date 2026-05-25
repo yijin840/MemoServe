@@ -1,5 +1,5 @@
 # =============================================================================
-# PayCrypto API 智能客服系统 - Docker Compose 配置
+# mem0-demo 智能客服系统 - Docker Compose 配置
 # =============================================================================
 # 使用方法:
 #   启动: docker-compose up -d
@@ -11,12 +11,12 @@ version: '3.8'
 
 services:
   # 客服系统主服务
-  paycrypto-cs:
+  mem0-demo:
     build:
       context: .
       dockerfile: Dockerfile
-    image: paycrypto-cs:latest
-    container_name: paycrypto-cs
+    image: mem0-demo:latest
+    container_name: mem0-demo
     restart: unless-stopped
     ports:
       - "8000:8000"
@@ -39,7 +39,7 @@ services:
       # 日志目录
       - ./logs:/app/logs
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -50,7 +50,7 @@ services:
   # （可选）Nginx 反向代理
   nginx:
     image: nginx:alpine
-    container_name: paycrypto-nginx
+    container_name: mem0-demo-nginx
     restart: unless-stopped
     ports:
       - "80:80"
@@ -59,14 +59,14 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/ssl:/etc/nginx/ssl:ro
     depends_on:
-      - paycrypto-cs
+      - mem0-demo
     networks:
-      - paycrypto-network
+      - mem0-demo-network
     profiles:
       - with-nginx  # 默认不启动，需要时使用 --profile with-nginx
 
 networks:
-  paycrypto-network:
+  mem0-demo-network:
     driver: bridge
 
 volumes:

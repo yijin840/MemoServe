@@ -1,20 +1,21 @@
 #!/usr/bin/env bash
 # ============================================================
-#  MemoServe 启动/停止/重启 管理脚本
+#  mem0-demo 启动/停止/重启 管理脚本
 #  用法: ./run.sh {start|stop|restart|status|logs}
 # ============================================================
 
 set -euo pipefail
 
 # ---- 基础路径 ----
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PID_DIR="$SCRIPT_DIR/.pids"
-LOG_DIR="$SCRIPT_DIR/logs"
-ENV_FILE="$SCRIPT_DIR/config/.env"
+# scripts/ 的上级目录即为项目根目录
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PID_DIR="$PROJECT_ROOT/.pids"
+LOG_DIR="$PROJECT_ROOT/logs"
+ENV_FILE="$PROJECT_ROOT/.env"
 
 # ---- 进程定义 ----
 # main.py -> uvicorn FastAPI
-MAIN_MODULE="main:app"
+MAIN_MODULE="app.main:app"
 MAIN_PID="$PID_DIR/main.pid"
 MAIN_LOG="$LOG_DIR/main.log"
 MAIN_PORT="${PORT:-8000}"
@@ -155,7 +156,7 @@ cmd_start() {
         warn "bot 已在运行 (PID: $pid)，跳过。"
     else
         info "启动 telegram_bot ..."
-        nohup python3 "$SCRIPT_DIR/telegram_bot.py" \
+        nohup python3 "$PROJECT_ROOT/app/telegram_bot.py" \
             >> "$BOT_LOG" 2>&1 &
         echo $! > "$BOT_PID"
         info "bot PID: $(cat "$BOT_PID")  日志: $BOT_LOG"

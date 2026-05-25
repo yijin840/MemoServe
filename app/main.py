@@ -31,12 +31,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
-from config import APP_HOST, APP_PORT, DEBUG, TELEGRAM_BOT_TOKEN, check_startup
-from rag_knowledge_base import KnowledgeBase
-from memory_manager import MemoryManager
-from answer_cache import AnswerCache
-from knowledge_agent import CustomerServiceAgent as KnowledgeAgent
-from router_agent import IntentClassifier
+from .config import APP_HOST, APP_PORT, DEBUG, TELEGRAM_BOT_TOKEN, check_startup
+from .rag_knowledge_base import KnowledgeBase
+from .memory_manager import MemoryManager
+from .answer_cache import AnswerCache
+from .knowledge_agent import CustomerServiceAgent as KnowledgeAgent
+from .router_agent import IntentClassifier
 
 # ====================== 日志配置 ======================
 logging.basicConfig(
@@ -53,8 +53,11 @@ agent: Optional[IntentClassifier] = None  # 意图分类器（统一入口）
 knowledge_agent: Optional[KnowledgeAgent] = None
 _telegram_app = None  # Telegram bot Application 实例
 
+from pathlib import Path
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 # 知识库文件目录
-KNOWLEDGE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "knowledge")
+KNOWLEDGE_DIR = str(PROJECT_ROOT / "data" / "knowledge")
 os.makedirs(KNOWLEDGE_DIR, exist_ok=True)
 
 

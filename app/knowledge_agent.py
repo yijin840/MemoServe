@@ -24,7 +24,7 @@ import logging
 from typing import Optional, AsyncIterator
 from openai import OpenAI, AsyncOpenAI
 
-from config import (
+from .config import (
     DASHSCOPE_API_KEY,
     QWEN_MODEL,
     QWEN_BASE_URL,
@@ -32,9 +32,9 @@ from config import (
     RAG_SCORE_THRESHOLD,
     MEM0_TOP_K,
 )
-from rag_knowledge_base import KnowledgeBase
-from memory_manager import MemoryManager
-from answer_cache import AnswerCache
+from .rag_knowledge_base import KnowledgeBase
+from .memory_manager import MemoryManager
+from .answer_cache import AnswerCache
 
 logger = logging.getLogger(__name__)
 

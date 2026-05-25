@@ -25,14 +25,14 @@ from telegram.ext import (
     ContextTypes,
 )
 
-from knowledge_agent import CustomerServiceAgent
-from router_agent import IntentClassifier
-from config import TELEGRAM_BOT_TOKEN
+from .knowledge_agent import CustomerServiceAgent
+from .router_agent import IntentClassifier
+from .config import TELEGRAM_BOT_TOKEN
 
 logger = logging.getLogger(__name__)
 
 # 群 ID → user_id 映射（持久化到 JSON 文件，重启不丢失）
-GROUP_MAP_FILE = Path(__file__).resolve().parent / "data" / "telegram_group_map.json"
+GROUP_MAP_FILE = Path(__file__).resolve().parent.parent / "data" / "telegram_group_map.json"
 
 def _load_group_map() -> dict[str, str]:
     """从 JSON 文件加载群 ID → user_id 映射"""

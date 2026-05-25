@@ -6,15 +6,21 @@
 
 ```
 .
-├── main.py                  # FastAPI 入口 + 生命周期管理
-├── config.py                # 全局配置（环境变量加载）
-├── router_agent.py          # 意图分类器（IntentClassifier）
-├── knowledge_agent.py       # 知识库 Agent（CustomerServiceAgent）
-├── rag_knowledge_base.py   # ChromaDB 向量检索
-├── memory_manager.py        # mem0 记忆管理
-├── answer_cache.py          # 问答缓存（双模式：精确 + 语义）
-├── telegram_bot.py         # Telegram Bot 接入
-├── prod_grounding_check.py # 生产环境答案真实性校验
+├── app/                      # 应用主包
+│   ├── __init__.py
+│   ├── main.py                  # FastAPI 入口 + 生命周期管理
+│   ├── config/
+│   │   └── __init__.py        # 全局配置（环境变量加载）
+│   ├── router_agent.py          # 意图分类器（IntentClassifier）
+│   ├── knowledge_agent.py       # 知识库 Agent（CustomerServiceAgent）
+│   ├── rag_knowledge_base.py   # ChromaDB 向量检索
+│   ├── memory_manager.py        # mem0 记忆管理
+│   ├── answer_cache.py          # 问答缓存（双模式：精确 + 语义）
+│   ├── telegram_bot.py         # Telegram Bot 接入
+│   └── prod_grounding_check.py # 生产环境答案真实性校验
+├── scripts/                  # 部署与运行脚本
+│   ├── deploy.sh              # 一键部署脚本（交互式/dev/prod）
+│   └── run.sh                # 启动/停止/重启管理脚本
 ├── static/
 │   └── index.html          # Web 聊天界面
 ├── data/
@@ -25,6 +31,15 @@
     ├── 问题清单.md           # 已知问题清单与修复方案
     ├── 项目总结.md           # 项目总结
     └── 部署文档.md           # 部署文档
+```
+
+**启动方式：**
+```bash
+# 开发模式（热重载）
+uvicorn app.main:app --reload
+
+# 生产模式
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
 ```
 
 ## 功能特性

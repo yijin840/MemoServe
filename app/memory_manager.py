@@ -16,7 +16,7 @@ import chromadb
 from chromadb.config import Settings as ChromaSettings
 from mem0 import Memory
 
-from config import (
+from .config import (
     DASHSCOPE_API_KEY,
     QWEN_MODEL,
     QWEN_BASE_URL,

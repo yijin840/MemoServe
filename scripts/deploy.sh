@@ -26,8 +26,8 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# 项目根目录
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# 项目根目录（scripts/ 的上级目录）
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
 
 # 默认参数
@@ -445,7 +445,7 @@ start_server() {
             echo ""
             echo "按 Ctrl+C 停止服务"
             echo ""
-            $UVICORN_CMD server:app --host 0.0.0.0 --port 8000 --reload
+            $UVICORN_CMD app.main:app --host 0.0.0.0 --port 8000 --reload
             ;;
         "prod")
             print_info "启动生产模式（多 worker）..."
@@ -456,7 +456,7 @@ start_server() {
             echo ""
             echo "按 Ctrl+C 停止服务"
             echo ""
-            $UVICORN_CMD server:app --host 0.0.0.0 --port 8000 --workers 4 --no-access-log
+            $UVICORN_CMD app.main:app --host 0.0.0.0 --port 8000 --workers 4 --no-access-log
             ;;
     esac
 }
@@ -485,7 +485,7 @@ Type=simple
 User=$CURRENT_USER
 WorkingDirectory=$PROJECT_PATH
 Environment="PATH=$PROJECT_PATH/venv/bin"
-ExecStart=$PROJECT_PATH/venv/bin/uvicorn server:app --host 0.0.0.0 --port 8000 --workers 4
+ExecStart=$PROJECT_PATH/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
 Restart=always
 RestartSec=10
 StandardOutput=journal
