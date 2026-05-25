@@ -1,660 +1,458 @@
-# MemoServe — 智能客服系统
-
-> 基于 **mem0ai + 通义千问 (Qwen) + ChromaDB + RAG** 的智能客服系统  
-> 支持 Web 对话、Telegram Bot 接入、知识库动态加载、跨会话用户记忆
-
-[![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-009688.svg)](https://fastapi.tiangolo.com/)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-
----
-
-## 目录
-
-- [功能特性](#功能特性)
-- [快速开始](#快速开始)
-- [配置参数详解](#配置参数详解)
-- [服务管理（run.sh）](#服务管理runsh)
-- [项目结构](#项目结构)
-- [架构说明](#架构说明)
-- [API 文档](#api-文档)
-- [知识库管理](#知识库管理)
-- [Telegram Bot 配置](#telegram-bot-配置)
-- [生产部署指南](#生产部署指南)
-- [已知问题与待优化项](#已知问题与待优化项)
-- [故障排查](#故障排查)
-- [相关文档](#相关文档)
-
----
-
-## 功能特性
-
-- **意图分类 + 知识库问答** — IntentClassifier 识别意图（faq/greeting/unknown），KnowledgeAgent 处理知识库问答
-- **RAG 知识库问答** — ChromaDB 向量检索 + Qwen Embedding，支持动态加载知识库
-- **严格模式** — 知识库外的问题一律返回"不支持"，不编造；RAG 分数低于阈值时直接短路拒绝
-- **跨会话用户记忆** — mem0ai 持久化用户画像和对话历史，重启不丢失
-- **双模式回答缓存** — 精确匹配 + 语义相似度缓存，降低延迟和成本
-- **多渠道接入** — Web 界面（FastAPI）+ Telegram Bot 同时支持
-- **流式 SSE 输出** — 支持 `/chat/stream` 实时流式返回答案
-
----
-
-## 快速开始
-
-### 环境要求
-
-| 依赖 | 版本要求 | 说明 |
-|------|----------|------|
-| Python | ≥ 3.9 | 推荐 3.9+（3.9 已测试） |
-| pip | 最新版 | 安装 Python 依赖 |
-| DashScope API Key | — | 阿里云通义千问 API Key（[获取地址](https://dashscope.aliyun.com/)） |
-| Telegram Bot Token | 可选 | 如需 Telegram Bot 接入，向 [@BotFather](https://t.me/BotFather) 申请 |
-
-### 1. 克隆项目
-
-```bash
-git clone git@github.com:yijin840/MemoServe.git
-cd MemoServe
-```
-
-### 2. 安装依赖
-
-```bash
-pip install -r requirements.txt
-```
-
-### 3. 配置环境变量
-
-```bash
-cp config/.env.example config/.env
-```
-
-编辑 `config/.env`，**必须填写** `DASHSCOPE_API_KEY`：
-
-```env
-# 必填：阿里云 DashScope API Key
-DASHSCOPE_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
-
-# 可选：Telegram Bot Token（不需要 Bot 接入可留空）
-TELEGRAM_BOT_TOKEN=
-
-# 服务端口（默认 8000）
-APP_PORT=8000
-```
-
-> ⚠️ 完整参数说明见 [配置参数详解](#配置参数详解) 章节。
-
-### 4. 启动服务
-
-推荐使用 `run.sh` 管理服务：
-
-```bash
-# 启动所有服务（main + bot）
-./run.sh start
-
-# 查看运行状态
-./run.sh status
-
-# 查看实时日志
-./run.sh logs        # 所有日志
-./run.sh logs main   # 只看 Web 服务日志
-./run.sh logs bot    # 只看 Bot 日志
-
-# 停止所有服务（优雅停止，先 SIGTERM，15s 后 SIGKILL）
-./run.sh stop
-
-# 重启所有服务
-./run.sh restart
-```
-
-也可以直接运行（仅启动 Web 服务，不含 Bot）：
-
-```bash
-python main.py
-# 或
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-### 5. 访问服务
-
-| 地址 | 说明 |
-|------|------|
-| http://localhost:8000 | Web 聊天界面 |
-| http://localhost:8000/docs | Swagger API 文档（在线调试） |
-| http://localhost:8000/redoc | ReDoc API 文档 |
-
----
-
-## 配置参数详解
-
-所有参数在 `config/.env` 文件中配置，以下按功能分组说明。
-
-### 一、Qwen / DashScope 配置
-
-| 参数名 | 默认值 | 说明 |
-|--------|--------|------|
-| `DASHSCOPE_API_KEY` | **必填，无默认值** | 阿里云 DashScope API Key。[获取地址](https://dashscope.aliyun.com/) |
-| `QWEN_MODEL` | `qwen-plus` | 对话使用的 Qwen 模型。`qwen-plus` / `qwen-turbo` / `qwen-max` 等 |
-| `QWEN_EMBEDDING_MODEL` | `text-embedding-v3` | Embedding 模型，用于 RAG 向量化。`text-embedding-v3` 是推荐值 |
-
-### 二、ChromaDB 配置
-
-| 参数名 | 默认值 | 说明 |
-|--------|--------|------|
-| `CHROMA_PERSIST_PATH` | `<项目根>/data/chroma_db` | ChromaDB 数据持久化目录（基于项目根目录的绝对路径），重启不丢失 |
-| `CHROMA_COLLECTION_NAME` | `customer_service_kb` | 知识库向量数据的 Collection 名称 |
-| `CHROMA_MEMORY_COLLECTION` | `mem0_memory` | mem0 用户记忆的 Collection 名称 |
-
-### 三、RAG 配置
-
-| 参数名 | 默认值 | 说明 |
-|--------|--------|------|
-| `RAG_TOP_K` | `5` | 每次检索返回 Top-K 个最相关文档片段 |
-| `RAG_CHUNK_SIZE` | `500` | 知识库文本分块大小（字符数），需大于 `RAG_CHUNK_OVERLAP` |
-| `RAG_CHUNK_OVERLAP` | `50` | 文本分块重叠字符数，保证上下文连贯 |
-| `RAG_SCORE_THRESHOLD` | `0.55` | RAG 检索最低相关度阈值（0~1）。低于此值的检索结果不会被使用，**直接拒绝回答**，避免乱答 |
-
-### 四、mem0 记忆配置
-
-| 参数名 | 默认值 | 说明 |
-|--------|--------|------|
-| `MEM0_TOP_K` | `5` | 每次对话检索的历史记忆条数 |
-| `MEM0_SCORE_THRESHOLD` | `0.3` | 记忆检索最低相关度阈值（0~1），生产建议 0.4 |
-| `MEM0_CUSTOM_INSTRUCTIONS` | 空 | 自定义 mem0 记忆提取指令，控制从对话中提取什么信息 |
-| `MEM0_MEMORY_STRATEGY` | `customer_service` | 记忆提取策略：`customer_service`（客服场景）/ `general`（通用）/ `strict`（严格模式） |
-
-### 五、应用配置
-
-| 参数名 | 默认值 | 说明 |
-|--------|--------|------|
-| `APP_PORT` | `8000` | FastAPI 服务监听端口 |
-| `APP_HOST` | `0.0.0.0` | 监听地址，`0.0.0.0` 允许外部访问 |
-| `DEBUG` | `true` | 调试模式。`true` 时开启详细日志；生产环境设为 `false` |
-
-### 六、Telegram Bot 配置
-
-| 参数名 | 默认值 | 说明 |
-|--------|--------|------|
-| `TELEGRAM_BOT_TOKEN` | 空 | Telegram Bot Token。向 [@BotFather](https://t.me/BotFather) 申请，不需要 Bot 可留空（Bot 不会启动） |
-
-### 七、回答缓存配置
-
-| 参数名 | 默认值 | 说明 |
-|--------|--------|------|
-| `ENABLE_ANSWER_CACHE` | `true`（代码中硬编码） | 是否启用回答缓存。启用后相同/相似问题直接返回缓存答案 |
-| `CACHE_TTL` | `3600` | 缓存过期时间（秒），默认 1 小时 |
-| `CACHE_SEMANTIC_THRESHOLD` | `0.92` | 语义缓存相似度阈值（0~1）。高于此值的相似问题命中缓存 |
-
-> ⚠️ 当前缓存代码被注释（`knowledge_agent.py`），启用需取消注释。见 [已知问题](#已知问题与待优化项)。
-
-### 八、生产安全配置（生产部署必改）
-
-| 参数名 | 默认值 | 说明 |
-|--------|--------|------|
-| `JWT_SECRET_KEY` | `change-me-in-production!` | JWT 签名密钥，**生产必须修改**为一个随机长字符串 |
-| `CORS_ORIGINS` | `*` | CORS 允许的域名列表，生产环境应改为具体域名，如 `https://yourdomain.com` |
-
----
-
-## 服务管理（run.sh）
-
-项目根目录提供 `run.sh` 脚本，支持优雅启动、停止、重启和日志查看。
-
-### 子命令说明
-
-```bash
-./run.sh start     # 启动所有服务（main + bot）
-./run.sh stop      # 优雅停止所有服务
-./run.sh restart   # 重启所有服务（先 stop，再 start）
-./run.sh status    # 查看所有服务运行状态
-./run.sh logs      # 实时查看所有日志（tail -f）
-./run.sh logs main # 只看 Web 服务日志
-./run.sh logs bot  # 只看 Bot 日志
-```
-
-### 优雅停止说明
-
-1. 发送 `SIGTERM` 信号，等待进程优雅退出（处理完当前请求）
-2. 最多等待 15 秒
-3. 若仍未退出，发送 `SIGKILL` 强制终止
-
-### PID 和日志位置
-
-| 类型 | 路径 |
-|------|------|
-| main PID | `.pids/main.pid` |
-| bot PID | `.pids/bot.pid` |
-| main 日志 | `logs/main.log` |
-| bot 日志 | `logs/bot.log` |
-
-> `.pids/` 和 `logs/` 目录会在首次运行时自动创建，已加入 `.gitignore`。
-
----
-
-## 项目结构
-
-```
-MemoServe/
-├── main.py                  # FastAPI 入口，注册路由和生命周期
-├── config/
-│   ├── __init__.py          # 全局配置，从 config/.env 加载
-│   ├── .env                 # 环境变量（含 API Key 等敏感信息，已 gitignore）
-│   └── .env.example         # 环境变量模板
-├── router_agent.py          # IntentClassifier：LLM 意图分类（faq/greeting/unknown）
-├── knowledge_agent.py       # 知识库 Agent：RAG 检索 + LLM 生成 + 记忆保存
-├── rag_knowledge_base.py    # RAG 知识库：ChromaDB + Qwen Embedding
-├── memory_manager.py        # mem0ai 记忆管理：用户画像 + 对话存档
-├── answer_cache.py          # 双模式回答缓存（精确匹配 + 语义相似度）
-├── telegram_bot.py          # Telegram Bot 接入
-├── prod_grounding_check.py  # 生产加固：答案真实性校验
-├── requirements.txt         # Python 依赖清单
-├── run.sh                   # 服务管理脚本（start/stop/restart/status/logs）
-├── static/
-│   └── index.html           # Web 聊天前端
-├── data/
-│   ├── chroma_db/           # ChromaDB 持久化数据（gitignore）
-│   └── knowledge/           # 知识库原始文件（.md/.txt/.pdf/.docx，保留版本控制）
-├── docs/                    # 项目文档
-│   ├── PROD_DEPLOY_PLAN.md
-│   ├── SYSTEM_REVIEW.md
-│   ├── TELEGRAM_SETUP.md
-│   ├── TEST_CASES.md
-│   └── ...
-└── logs/                    # 运行日志（自动创建，已 gitignore）
-```
-
----
-
-## 架构说明
-
-### 系统架构图
-
-```
-用户输入
-   │
-   ▼
-┌──────────────────────────────────────┐
-│     IntentClassifier                 │  ← 统一入口，意图分类
-│  · 纯寒暄快速路径（≤10 词，免 LLM）  │
-│  · LLM 多意图分类（faq/greeting/…）  │
-│  · 支持扩展自定义意图                 │
-└──────────────┬───────────────────────┘
-               │
-       ┌───────┴───────┐
-       ▼               ▼
-  FAQ 意图        greeting/unknown
-       │                │
-       ▼                ▼
-┌────────────────┐  ┌──────────────────┐
-│ KnowledgeAgent │  │  直接返回预设    │
-│ RAG → LLM      │  │  问候语/兜底文本 │
-│ → 记忆保存     │  │  （不调 LLM）    │
-│ + 缓存可选     │  │                  │
-└────────────────┘  └──────────────────┘
-```
-
-### 意图分类说明
-
-| 意图 | 说明 | 处理方式 |
-|------|------|----------|
-| `faq` | 常见知识库问题 | 走 KnowledgeAgent（RAG 检索 + LLM 生成 + 记忆保存） |
-| `greeting` | 问候语 | 快速路径：词库匹配直接返回，不调 LLM；LLM 兜底分类 |
-| `unknown` | 无法识别 | 返回兜底回答，建议转人工 |
-
-> 未来扩展：只需在 `IntentClassifier.valid_intents` 添加新意图名称（如 `"business"`），分类器会自动识别并路由，无需改其他代码。
-
----
-
-## API 文档
-
-服务启动后访问 http://localhost:8000/docs 可在线调试所有接口。
-
-### 对话接口
-
-#### POST `/chat` — 普通对话
-
-```bash
-curl -X POST http://localhost:8000/chat \
-  -H "Content-Type: application/json" \
-  -d '{
-    "message": "如何对接API？",
-    "user_id": "user_001",
-    "history": []
-  }'
-```
-
-**响应示例：**
-
-```json
-{
-  "answer": "API 对接文档请参考 https://docs.pay-crypto.com...",
-  "rag_sources": [
-    {
-      "text": "API 对接流程：1. 注册账号 2. 获取 API Key 3. 调用接口...",
-      "source": "FAQ.md",
-      "score": 0.82
-    }
-  ],
-  "memories_used": [...],
-  "model": "qwen-plus",
-  "intents": ["faq"]
-}
-```
-
-#### GET `/chat/stream` — 流式对话（SSE）
-
-```bash
-curl "http://localhost:8000/chat/stream?message=如何对接API&user_id=user_001"
-```
-
-返回 `text/event-stream` 格式的 SSE 流，逐 token 返回答案。
-
-#### GET `/chat/classify` — 意图分类（调试用）
-
-```bash
-curl "http://localhost:8000/chat/classify?message=你好"
-```
-
-返回类似 `{"intents": ["greeting"], "method": "fast_path"}`。
-
-### 知识库管理接口
-
-```bash
-# 上传文件（.txt / .md / .pdf / .docx）
-curl -X POST http://localhost:8000/knowledge/file \
-  -F "file=@/path/to/document.pdf"
-
-# 查看知识库中的所有来源
-curl http://localhost:8000/knowledge/list
-
-# 查看知识库统计
-curl http://localhost:8000/health
-
-# 删除指定来源的所有文档
-curl -X DELETE http://localhost:8000/knowledge/FAQ.md
-```
-
-### 记忆管理接口
-
-```bash
-# 查看用户的记忆
-curl http://localhost:8000/memory/user_001
-
-# 清除用户的所有记忆（两步确认，前端需二次点击）
-curl -X DELETE http://localhost:8000/memory/user_001
-```
-
-### 缓存管理接口
-
-```bash
-# 查看缓存统计
-curl http://localhost:8000/cache/stats
-
-# 清除用户的缓存
-curl -X DELETE "http://localhost:8000/cache?user_id=user_001"
-```
-
----
-
-## 知识库管理
-
-### 支持的文件格式
-
-| 格式 | 说明 |
-|------|------|
-| `.txt` / `.md` | 纯文本 / Markdown |
-| `.pdf` | PDF 文档（自动提取文字） |
-| `.docx` | Word 文档（自动提取文字） |
-
-### 知识库文件放置
-
-将知识库文件放入 `data/knowledge/` 目录，然后通过 API 或启动时自动加载：
-
-```bash
-# 放置文件
-cp your_document.md data/knowledge/
-
-# 通过 API 热加载（推荐，无需重启）
-curl -X POST http://localhost:8000/knowledge/file -F "file=@your_document.md"
-```
-
-### RAG 分块参数调优
-
-| 场景 | 建议 `RAG_CHUNK_SIZE` | 建议 `RAG_CHUNK_OVERLAP` |
-|------|------------------------|----------------------------|
-| 问答对（FAQ） | `300` | `30` |
-| 长文档（政策条款） | `800` | `100` |
-| 技术文档（API 文档） | `500` | `50` |
-
-> ⚠️ 必须保证 `RAG_CHUNK_OVERLAP < RAG_CHUNK_SIZE`，否则会死循环。
-
----
-
-## Telegram Bot 配置
-
-### 1. 申请 Bot Token
-
-1. 在 Telegram 中打开 [@BotFather](https://t.me/BotFather)
-2. 发送 `/newbot`，按提示设置用户名
-3. 获得 Bot Token（形如 `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`）
-4. 将 Token 填入 `config/.env` 的 `TELEGRAM_BOT_TOKEN`
-
-### 2. 启动 Bot
-
-```bash
-./run.sh start
-```
-
-启动后：
-- **私聊**：直接用 Telegram 给 Bot 发消息即可
-- **群聊**：将 Bot 加入群，消息中 @bot 或回复 bot 消息触发
-
-### 3. 群聊用户绑定
-
-群聊中默认用 `telegram_group_{chat_id}` 作为 user_id。若要让群聊使用固定 user_id（以复用记忆）：
-
-```
-# 在群聊中发送：
-/setid my_company_user
-
-# 重置为默认：
-/resetid
-
-# 查看当前绑定：
-/whoami
-```
-
-> ⚠️ `GROUP_USER_MAP` 当前仅内存存储，重启后丢失。见 [已知问题](#已知问题与待优化项)。
-
----
-
-## 生产部署指南
-
-### 生产 .env 配置（参考）
-
-```env
-# ========== 必须修改 ==========
-DASHSCOPE_API_KEY=sk-your-real-key-here
-
-# RAG 阈值调高，防止乱答
-RAG_SCORE_THRESHOLD=0.65
-MEM0_SCORE_THRESHOLD=0.4
-
-# JWT 密钥（必须修改为一个随机长字符串！）
-JWT_SECRET_KEY=your-random-secret-key-here-change-this
-
-# ========== 安全 ==========
-# CORS：改为具体域名，不要用 *
-CORS_ORIGINS=https://yourdomain.com
-
-# 关闭调试模式
-DEBUG=false
-
-# ========== 性能优化 ==========
-# 启用回答缓存（需先取消 knowledge_agent.py 中的注释）
-# CACHE_TTL=3600
-
-# ========== 可选 ==========
-# 人工介入开关（低置信度时转人工）
-# ENABLE_HUMAN_HANDOFF=false
-# HANDOFF_THRESHOLD=0.5
-```
-
-### 生产部署检查清单
-
-- [ ] `DASHSCOPE_API_KEY` 已填写真实 Key
-- [ ] `RAG_SCORE_THRESHOLD` 已调高至 `0.65` 以上
-- [ ] `JWT_SECRET_KEY` 已修改为随机字符串
-- [ ] `DEBUG` 已设为 `false`
-- [ ] `CORS_ORIGINS` 已改为具体域名（非 `*`）
-- [ ] 启用回答缓存（取消 `knowledge_agent.py` 相关注释）
-- [ ] 配置进程管理器（systemd / supervisor）自动拉起服务
-- [ ] 配置 Nginx 反向代理 + HTTPS
-- [ ] 配置日志轮转（logrotate）
-
-### systemd 服务配置（参考）
-
-创建 `/etc/systemd/system/memoserve.service`：
-
-```ini
-[Unit]
-Description=MemoServe Customer Service
-After=network.target
-
-[Service]
-Type=simple
-User=your_user
-WorkingDirectory=/path/to/MemoServe
-ExecStart=/path/to/MemoServe/run.sh start
-ExecStop=/path/to/MemoServe/run.sh stop
-Restart=on-failure
-RestartSec=10
-Environment="PATH=/usr/bin:/usr/local/bin"
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable memoserve
-sudo systemctl start memoserve
-sudo systemctl status memoserve
-```
-
----
-
-## 已知问题与待优化项
-
-### 🔴 高优先级
-
-#### 问题 1：回答缓存被禁用
-
-**位置：** `knowledge_agent.py` `chat()` 和 `stream_chat()` 方法中
-
-**影响：** 每个问题都走完整 RAG 检索 + LLM 调用，延迟高、Token 成本高。
-
-**修复：** 取消相关代码注释，重新启用缓存。缓存模块 `answer_cache.py` 已实现（精确匹配 + 语义相似度），只需在 KnowledgeAgent 中接入。
-
-#### 问题 2：`GROUP_USER_MAP` 不持久化
-
-**位置：** `telegram_bot.py` 全局变量
-
-```python
-GROUP_USER_MAP: dict[str, str] = {}  # ⚠️ 仅内存，重启丢失
-```
-
-**影响：** Bot 重启后所有群的 `/setid` 绑定丢失。
-
-**修复：** 改为 JSON 文件读写（见 `docs/PROD_DEPLOY_PLAN.md` 第四节）。
-
-#### 问题 3：流式模式不保存记忆
-
-**位置：** `knowledge_agent.py` `stream_chat()` 方法
-
-**影响：** 使用 SSE 流式对话的用户，其对话不会被记录到 mem0 记忆中。
-
-**修复：** 在 `stream_chat()` 末尾补充记忆保存逻辑（见 `docs/PROD_DEPLOY_PLAN.md` 第三节）。
-
-### 🟡 中优先级
-
-#### 问题 4：Markdown → Telegram HTML 转换不完整
-
-`markdown_to_telegram_html()` 对表格、嵌套格式、多级引用的转换不完整。
-
-**建议：** 复杂格式知识库输出时先转为纯文本，或限制知识库输出格式。
-
-#### 问题 5：`config/__init__.py` 缺少阈值合理性校验
-
-`RAG_SCORE_THRESHOLD`、`MEM0_SCORE_THRESHOLD` 等值若为非法值（如 >1 或 <0），启动时不会报错。
-
-**建议：** 在 `check_startup()` 中增加范围校验。
-
-### 🟢 优化建议
-
-- **ChromaDB 分离：** 知识库和对话存档可使用不同的 ChromaDB 实例
-- **监控指标：** 增加 Prometheus / OpenTelemetry 指标（对话耗时、意图分布、缓存命中率）
-- **知识库热加载增强：** 当前仅支持 API 单文件上传，可增加批量导入 / Git 仓库同步
-
----
-
-## 故障排查
-
-### 启动失败
-
-**现象：** `./run.sh start` 后 `./run.sh status` 显示未运行
-
-**排查步骤：**
-
-```bash
-# 查看启动日志
-cat logs/main.log
-cat logs/bot.log
-
-# 常见原因：
-# 1. DASHSCOPE_API_KEY 未配置 → 填写 config/.env
-# 2. 端口被占用 → 修改 APP_PORT 或 kill 占用进程
-# 3. ChromaDB 目录无写入权限 → chmod 755 data/chroma_db
-```
-
-### RAG 检索无结果 / 相关度低
-
-```bash
-# 检查知识库是否有数据
-curl http://localhost:8000/knowledge/list
-
-# 检查 RAG_SCORE_THRESHOLD 是否过高
-# 在 config/.env 中调低 RAG_SCORE_THRESHOLD 后重启
-```
-
-### Bot 不响应群聊消息
-
-- 确认在群聊中 @bot 或回复了 bot 消息
-- 确认 `TELEGRAM_BOT_TOKEN` 配置正确
-- 查看 `logs/bot.log` 报错信息
-
-### 内存占用过高
-
-ChromaDB 默认将所有向量加载到内存。若知识库很大：
-
-```env
-# 在 config/.env 中配置 ChromaDB 使用磁盘 + 内存混合模式
-# （需要升级 ChromaDB 版本，或使用远程 ChromaDB）
-```
-
----
-
-## 相关文档
-
-| 文档 | 说明 |
-|------|------|
-| [docs/PROD_DEPLOY_PLAN.md](docs/PROD_DEPLOY_PLAN.md) | 生产部署完整方案（防止乱答、动态加载、记忆持久化、用户认证） |
-| [docs/SYSTEM_REVIEW.md](docs/SYSTEM_REVIEW.md) | 系统完整审查报告（架构、已修复问题、剩余问题清单） |
-| [docs/TELEGRAM_SETUP.md](docs/TELEGRAM_SETUP.md) | Telegram Bot 详细配置指南 |
-| [docs/TEST_CASES.md](docs/TEST_CASES.md) | 测试用例报告 |
-
----
-
-## License
-
-MIT License
+# ============================================================
+# PayCrypto API 智能客服系统
+# ============================================================
+#
+# 项目简介
+# ----------
+# 基于 RAG（检索增强生成）的 API 文档智能问答系统。
+# 支持多 Agent 架构：意图分类 → 知识库 Agent / 业务 Agent。
+# 内置文档检索（TF-IDF 关键词 + 可选 Chroma 向量检索）、
+# 会话记忆（simple_memory / mem0）、自主学习（经验模式提炼）等功能。
+#
+# 适用场景
+# ----------
+# - API 文档智能问答（技术支持机器人）
+# - 企业内部知识库问答
+# - 需要结合文档检索 + LLM 的客服场景
+#
+# 技术栈
+# ----------
+# - 后端：Python 3.9+ / FastAPI / Uvicorn
+# - 前端：原生 HTML + CSS + Vanilla JS（无框架依赖）
+# - LLM：OpenAI 兼容接口（支持 OpenAI / DeepSeek / 智谱 等）
+# - 向量检索：ChromaDB + sentence-transformers（可选）
+# - 部署：单机运行，无需 Docker
+#
+# ============================================================
+
+
+# ------------------------------------------------------------
+# 1. 系统架构
+# ------------------------------------------------------------
+
+# 多 Agent 架构设计：
+
+#                    ┌─────────────────────┐
+#                    │   前端 (浏览器)      │
+#                    │  static/index.html  │
+#                    └─────────┬───────────┘
+#                              │ HTTP / JSON
+#                              ▼
+#                    ┌─────────────────────┐
+#                    │   FastAPI 路由层     │
+#                    │  server.py /api/ask │
+#                    └─────────┬───────────┘
+#                              │
+#                  ┌───────────┴────────────┐
+#                  │   意图分类 (classify_intent)  │
+#                  └───────────┬────────────┘
+#               ┌───────┬───────┬──────────┬────────┐
+#               ▼       ▼       ▼          ▼        ▼
+#            greeting  info   unknown   business  knowledge
+#                                  │          │
+#                            ┌─────┴─────┐  ┌───┴──────────┐
+#                            │  biz_agent  │  │  kb_agent       │
+#                            │  (占位实现)  │  │  Customer-    │
+#                            └────────────┘  │  ServiceAgent   │
+#                                            └────┬──────────┘
+#                                                 │
+#                              ┌──────────────────┼──────────────┐
+#                              ▼                  ▼              ▼
+#                         RAG 检索        记忆检索        LLM 调用
+#                        (rag_store)      (simple_      (call_ai_api)
+#                                            memory)
+
+
+# 核心模块说明：
+
+# server.py         — FastAPI 应用入口，路由定义，AI API 配置管理
+# agent.py           — 文档检索协调层，DSPy 优化模块（可选）
+# agents/
+#   __init__.py     — Agent 包导出
+#   kb_agent.py      — 知识库 Agent（CustomerServiceAgent）
+#   biz_agent.py     — 业务 Agent（占位，待对接真实 API）
+# doc_loader.py      — Markdown 文档加载器，按标题切块
+# rag_store.py       — RAG 检索层（TF-IDF 降级 / Chroma 向量检索）
+# obsidian_writer.py — 问答日志、经验模式写入 Obsidian vault
+# simple_memory.py   — 本地轻量记忆管理（sentence-transformers）
+# mem0_manager.py   — mem0 记忆管理（可选，需 API 兼容）
+# web_crawler.py    — 搜索导入爬虫（DuckDuckGo + BS4）
+# regression_test.py — 回归测试脚本
+# static/
+#   index.html       — 前端单页应用（聊天界面）
+
+
+# ------------------------------------------------------------
+# 2. 功能特性
+# ------------------------------------------------------------
+
+# [x] 多 Agent 意图分类（greeting / info_provide / knowledge / business / unknown）
+# [x] RAG 文档检索（TF-IDF 关键词 + Chroma 向量检索可选）
+# [x] 支持多种 LLM 提供商（OpenAI / DeepSeek / 智谱 / 自定义兼容接口）
+# [x] 会话记忆（按 user_id 隔离，支持 simple_memory 或 mem0）
+# [x] 自主学习（自动提炼经验模式到 patterns.json）
+# [x] 文档动态导入（URL 下载 / 本地上传 / 搜索导入）
+# [x] 前端 Markdown 渲染（标题 / 加粗 / 代码块 / 表格 / 引用）
+# [x] 多轮对话支持（按 session_id 隔离历史）
+# [x] 回归测试脚本
+# [x] 日志自动清理（超过 30 天自动删除）
+
+
+# ------------------------------------------------------------
+# 3. 项目结构
+# ------------------------------------------------------------
+
+# dspy/
+# ├── server.py              # FastAPI 入口
+# ├── agent.py               # 检索协调 + DSPy 优化
+# ├── agents/
+# │   ├── __init__.py
+# │   ├── kb_agent.py       # 知识库 Agent
+# │   └── biz_agent.py     # 业务 Agent
+# ├── doc_loader.py         # 文档加载 + 切块
+# ├── rag_store.py          # RAG 检索层
+# ├── obsidian_writer.py    # Obsidian 日志写入
+# ├── simple_memory.py      # 本地记忆管理
+# ├── mem0_manager.py       # mem0 管理器（可选）
+# ├── web_crawler.py        # 搜索导入爬虫
+# ├── regression_test.py     # 回归测试
+# ├── requirements.txt       # Python 依赖
+# ├── api_config.json       # AI 配置（不提交，见 .gitignore）
+# ├── memory_store.json     # 本地记忆存储（不提交）
+# ├── docs_cache/           # 文档缓存（不提交）
+# ├── chroma_db/            # Chroma 向量库（不提交）
+# ├── mem0_db/              # mem0 数据库（不提交）
+# ├── obsidian_vault/       # Obsidian vault（不提交）
+# └── static/
+#     └── index.html        # 前端页面
+
+
+# ------------------------------------------------------------
+# 4. 安装部署
+# ------------------------------------------------------------
+
+# 4.1 环境要求
+#   - Python 3.9+
+#   - pip / venv
+#   - （可选）Docker 20.10+ / Docker Compose 2.0+
+
+# 4.2 快速部署（推荐）
+#   使用部署脚本（自动检查环境、安装依赖、生成配置、启动服务）：
+#
+#   $ cd /path/to/dspy
+#   $ chmod +x deploy.sh
+#   $ ./deploy.sh              # 交互式部署
+#   $ ./deploy.sh --dev        # 开发模式（热重载）
+#   $ ./deploy.sh --prod       # 生产模式（多 worker）
+#   $ ./deploy.sh --check      # 仅检查环境
+
+# 4.3 手动部署
+#   # 创建虚拟环境
+#   $ python3 -m venv venv
+#   $ source venv/bin/activate
+#
+#   # 安装依赖
+#   $ pip install -r requirements.txt
+#
+#   # 生成配置文件
+#   $ cp .env.example .env
+#   $ vim .env                 # 填入真实的 API Key
+#
+#   # 启动服务（开发模式）
+#   $ uvicorn server:app --host 0.0.0.0 --port 8000 --reload
+#
+#   # 启动服务（生产模式）
+#   $ uvicorn server:app --host 0.0.0.0 --port 8000 --workers 4
+
+# 4.4 Docker 部署
+#   使用 Docker Compose（推荐生产环境）：
+#
+#   # 1. 复制环境变量模板
+#   $ cp .env.example .env
+#   $ vim .env                 # 填入 API Key
+#
+#   # 2. 构建并启动
+#   $ docker-compose up -d
+#
+#   # 3. 查看日志
+#   $ docker-compose logs -f
+#
+#   # 4. 停止服务
+#   $ docker-compose down
+#
+#   单独使用 Docker：
+#   $ docker build -t paycrypto-cs:latest .
+#   $ docker run -d -p 8000:8000 --env-file .env paycrypto-cs:latest
+
+# 4.5 生产环境部署（systemd）
+#   使用部署脚本配置 systemd 服务：
+#
+#   $ ./deploy.sh --prod
+#   # 按提示选择配置 systemd 服务
+#
+#   手动配置：
+#   # 1. 创建 systemd 服务文件（见 deploy.sh 中的 setup_systemd 函数）
+#   # 2. 启用并启动服务
+#   $ sudo systemctl enable paycrypto-cs
+#   $ sudo systemctl start paycrypto-cs
+#
+#   # 3. 查看服务状态
+#   $ sudo systemctl status paycrypto-cs
+#
+#   # 4. 查看日志
+#   $ sudo journalctl -u paycrypto-cs -f
+
+# 4.6 配置说明
+#   复制配置模板（如有），或首次启动后通过前端「AI 设置」页面配置：
+#
+#   {
+#     "provider": "custom",
+#     "api_key": "YOUR_API_KEY_HERE",
+#     "base_url": "https://your-api-endpoint/v1",
+#     "model": "your-model-name",
+#     "temperature": 0.7,
+#     "max_tokens": 2048,
+#     "top_p": 1.0,
+#     "enabled": true
+#   }
+#
+#   支持的 provider：openai / anthropic / siliconflow / deepseek / qwen / zhipu / custom
+
+# 4.7 可选：启用向量检索
+#   $ pip3 install chromadb sentence-transformers
+#   重启服务即可自动启用 Chroma 向量检索
+
+
+# ------------------------------------------------------------
+# 5. 配置说明（api_config.json）
+# ------------------------------------------------------------
+
+# 字段名           类型      说明
+# provider         str       提供商：openai / anthropic / siliconflow / deepseek / qwen / zhipu / custom
+# api_key          str       API 密钥（勿提交到 git）
+# base_url         str       自定义 API 地址（provider=custom 时必填）
+# model            str       模型名称
+# temperature      float    温度参数，0.0-2.0，默认 0.7
+# max_tokens       int      最大输出 token 数，默认 2048
+# top_p            float    nucleus sampling，0.0-1.0，默认 1.0
+# frequency_penalty  float  频率惩罚，默认 0.0
+# presence_penalty   float  存在惩罚，默认 0.0
+# enabled          bool     是否启用 AI，默认 false
+# system_prompt    str       自定义 system prompt（可选）
+
+
+# ------------------------------------------------------------
+# 6. API 接口文档
+# ------------------------------------------------------------
+
+# POST /api/ask
+#   请求体：{"question": "用户问题", "session_id": "会话ID"}
+#   响应体：{
+#     "answer": "回答内容",
+#     "source": "ai",
+#     "doc_hits": 10,
+#     "confidence": 0.8,
+#     "chunks_used": [{"title_path": "...", "score": 15.2, "content": "..."}],
+#     "method": "keyword"
+#   }
+
+# GET  /api/health
+#   响应体：{"status": "ok", "rag_enabled": true, "doc_chunks": 115, ...}
+
+# GET  /api/config
+
+# POST /api/config
+
+# POST /api/config/test
+
+# POST /api/docs/import
+
+# POST /api/docs/upload
+
+# POST /api/docs/crawl
+
+# DELETE /api/docs/remove?name=...
+
+# DELETE /api/docs/reset
+
+# GET  /api/patterns
+
+# POST /api/summary
+
+# DELETE /api/patterns/{pattern_id}
+
+# GET  /api/vault/files
+
+# GET  /api/vault/read?folder=...&name=...
+
+# DELETE /api/vault/delete?folder=...&name=...
+
+
+# ------------------------------------------------------------
+# 7. 前端使用说明
+# ------------------------------------------------------------
+
+# - 打开 http://localhost:8000
+# - 在输入框输入 API 相关问题，回车发送
+# - 侧边栏可查看文档管理、AI 设置
+# - 快捷提问按钮可快速测试常见场景
+# - 消息气泡下方显示：来源标签、文档命中数、检索方式、置信度
+
+
+# ------------------------------------------------------------
+# 8. 测试
+# ------------------------------------------------------------
+
+# 运行回归测试（需先启动服务）：
+#   $ python3 regression_test.py
+
+# 测试覆盖：
+# - 单轮意图分类（greeting / knowledge / unknown / business）
+# - 多轮对话上下文记忆
+# - 文档检索命中率
+# - API 接口连通性
+
+
+# ------------------------------------------------------------
+# 9. 开发说明
+# ------------------------------------------------------------
+
+# 文档切块逻辑：doc_loader.py → split_markdown()
+#   - 按 Markdown 标题（## / ###）切分
+#   - 每块不超过 max_chars（默认 1200）字符
+#   - 超长块按段落（\n\n）二次切分
+
+# RAG 检索逻辑：rag_store.py → search_docs()
+#   - 优先 Chroma 向量检索（若依赖已安装）
+#   - 降级为 TF-IDF 关键词检索
+
+# 意图分类逻辑：agents/kb_agent.py → classify_intent()
+#   - 关键词规则匹配
+#   - 返回：greeting / info_provide / knowledge / business / unknown
+
+# 会话记忆：simple_memory.py
+#   - 使用 sentence-transformers 本地模型向量化
+#   - 按 user_id 隔离存储到 memory_store.json
+#   - 可选替换为 mem0（需 API 兼容）
+
+
+# ------------------------------------------------------------
+# 10. 注意事项 / 已知问题
+# ------------------------------------------------------------
+
+# [!] api_config.json 包含 API Key，已加入 .gitignore，请勿手动提交
+# [!] memory_store.json / obsidian_vault/ 包含会话数据，已加入 .gitignore
+# [!] chroma_db/ / mem0_db/ 为本地向量库，已加入 .gitignore
+# [!] 使用第三方兼容 API 时，请注意其是否支持 top_p 参数
+# [!] mem0 需要 OpenAI 格式嵌入接口，部分第三方 API 不兼容
+
+# 已知问题（BUG）：
+# - BUG-02：文档中 HMAC 时间戳单位描述不一致（毫秒 vs 秒），已加 Prompt 约束
+# - BUG-03：mem0 与部分第三方 API 不兼容（已降级为 simple_memory）
+
+
+# ------------------------------------------------------------
+# 11. 版本历史
+# ------------------------------------------------------------
+
+# v4.0.0  (2026-05-25)
+#   - 多 Agent 架构重构（意图分类 + 子 Agent 路由）
+#   - 修复 Markdown h4 渲染缺失
+#   - 修复表格 HTML 转义问题
+#   - 增加 MAX_RAG_CHARS 预算控制
+#   - 增加时间戳单位 Prompt 约束
+
+# v3.0.0  (2026-05-XX)
+#   - 接入真实 LLM API（替代模拟回答）
+#   - 支持多提供商配置
+#   - 前端 UI 重构
+
+# v2.0.0  (2026-05-XX)
+#   - 加入 RAG 检索
+#   - 加入文档动态导入
+
+# v1.0.0  (2026-04-XX)
+#   - 初始版本，基础问答功能
+
+
+# ------------------------------------------------------------
+# 13. 部署脚本详细说明
+# ------------------------------------------------------------
+
+# deploy.sh 功能说明：
+#
+# 命令                  功能
+# --------------------------------------------------------------------------
+# ./deploy.sh           交互式部署（推荐首次使用）
+# ./deploy.sh --dev     开发模式快速部署（热重载）
+# ./deploy.sh --prod    生产模式部署（多 worker + 可选 systemd）
+# ./deploy.sh --check   仅检查系统环境（Python/pip/端口）
+# ./deploy.sh --skip-deps   跳过依赖安装
+# ./deploy.sh --skip-config 跳过配置文件生成
+# ./deploy.sh --no-venv    不使用虚拟环境
+#
+# 脚本自动完成步骤：
+#   1. 检查系统环境（Python 版本、pip、端口占用）
+#   2. 创建虚拟环境（venv/）
+#   3. 安装依赖包（requirements.txt）
+#   4. 生成配置文件模板（api_config.json、.env）
+#   5. 创建必要目录（static/、docs_cache/ 等）
+#   6. 启动服务（开发模式热重载 / 生产模式多 worker）
+#   7. （可选）配置 systemd 服务（生产环境开机自启）
+#
+# 生产环境 systemd 服务：
+#   - 服务名：paycrypto-cs.service
+#   - 启动：sudo systemctl start paycrypto-cs
+#   - 停止：sudo systemctl stop paycrypto-cs
+#   - 状态：sudo systemctl status paycrypto-cs
+#   - 日志：sudo journalctl -u paycrypto-cs -f
+
+
+# ------------------------------------------------------------
+# 14. Docker 部署详细说明
+# ------------------------------------------------------------
+
+# Dockerfile 使用说明：
+#   构建镜像：
+#     $ docker build -t paycrypto-cs:latest .
+#
+#   运行容器：
+#     $ docker run -d -p 8000:8000 --env-file .env paycrypto-cs:latest
+#
+#   查看日志：
+#     $ docker logs -f <container_id>
+#
+# docker-compose.yml 使用说明：
+#   完整启动（含 Nginx）：
+#     $ docker-compose --profile with-nginx up -d
+#
+#   仅启动客服系统：
+#     $ docker-compose up -d
+#
+#   停止并删除容器：
+#     $ docker-compose down
+#
+#   查看日志：
+#     $ docker-compose logs -f
+#
+#   重新构建：
+#     $ docker-compose build --no-cache
+#     $ docker-compose up -d
+#
+# 数据持久化（docker-compose）：
+#   - ./data/memory:/app/memory_store.json
+#   - ./data/chroma:/app/chroma_db
+#   - ./data/docs_cache:/app/docs_cache
+#   - ./logs:/app/logs
+
+
+# ------------------------------------------------------------
+# 12. License
+# ------------------------------------------------------------
+
+# MIT License
+
+
+# ============================================================
+# 文档结束
+# ============================================================
