@@ -46,8 +46,7 @@ REJECT_ANSWER = "抱歉，您的问题不在我的知识范围内，暂时无法
 # System Prompt
 # ══════════════════════════════════════════
 
-SYSTEM_PROMPT_TEMPLATE = """你是专业、友善的智能客服助手，严格基于知识库内容回答问题。
-
+SYSTEM_PROMPT_TEMPLATE = """
 ## 核心约束
 
 1. **如果【相关知识库内容】不为空**，请基于内容详细回答
@@ -58,7 +57,6 @@ SYSTEM_PROMPT_TEMPLATE = """你是专业、友善的智能客服助手，严格�
    - 查询接口的历史时间参数（former_time、latter_time 等）：**秒级** UNIX 时间戳
    - 回答涉及时间戳的问题时，必须先判断场景，明确告知用户单位
 5. **不确定时主动说明，避免误导用户**
-6. **语气亲切专业，使用中文回答**
 7. **用 Markdown 格式输出**
 {memory_section}
 """
@@ -116,19 +114,31 @@ class CustomerServiceAgent:
     def __init__(self):
         self._chat_history: dict[str, list[dict]] = {}  # session_id → [{role, content}]
 
-    def _build_system_prompt(self, memory_text: str) -> str:
+    def _build_system_prompt(self, memory_text: str, question: str = "") -> str:
         """构建带记忆的 System Prompt"""
         if memory_text:
             mem = MEMORY_SECTION.format(memory_content=memory_text)
         else:
             mem = ""
-        return SYSTEM_PROMPT_TEMPLATE.format(memory_section=mem)
+        
+        # 动态语言指令
+        has_chinese = any('\u4e00' <= c <= '\u9fff' for c in question)
+        if has_chinese:
+            lang_prefix = "你是专业、友善的智能客服助手，严格基于知识库内容回答问题。"
+        else:
+            lang_prefix = "You are a professional, friendly customer support assistant. You MUST answer in English only. Translate all Chinese knowledge base content to English. Never output Chinese."
+        
+        prompt = lang_prefix + "\n\n" + SYSTEM_PROMPT_TEMPLATE.format(memory_section=mem)
+        return prompt
 
     def _build_user_message(self, question: str, rag_text: str) -> str:
-        """构建带 RAG 的用户消息"""
+        """构建带 RAG 的用户消息，语言跟随用户问题"""
+        has_chinese = any('\u4e00' <= c <= '\u9fff' for c in question)
+        prefix = "用户问题：" if has_chinese else "User question (answer in English only): "
+        lang_note = "" if has_chinese else "[IMPORTANT: You must answer in English. Translate any Chinese knowledge base content to English in your response.]\n\n"
         if rag_text:
-            return f"{RAG_CONTEXT.format(rag_content=rag_text)}\n\n用户问题：{question}"
-        return f"{RAG_EMPTY}\n\n用户问题：{question}"
+            return f"{lang_note}{RAG_CONTEXT.format(rag_content=rag_text)}\n\n{prefix}{question}"
+        return f"{lang_note}{RAG_EMPTY}\n\n{prefix}{question}"
 
     def _should_archive(self, question: str, answer: str) -> bool:
         """判断是否值得存档（过滤纯闲聊）"""
@@ -218,7 +228,7 @@ class CustomerServiceAgent:
         t3 = time.time()
 
         # Step 3: 构建 Prompt
-        system_prompt = self._build_system_prompt(memory_text)
+        system_prompt = self._build_system_prompt(memory_text, question)
         user_message = self._build_user_message(question, rag_text)
 
         messages = [{"role": "system", "content": system_prompt}]
