@@ -181,7 +181,7 @@ User → FastAPI(/chat) → IntentClassifier(router_agent.py)
 4. **GROUP_USER_MAP 持久化**：`telegram_bot.py` 的群映射当前仅内存存储，重启后丢失，需改为 JSON 文件读写
 5. **流式对话记忆**：`stream_chat()` 方法当前不保存记忆，需补充
 
-详细生产部署方案见 [docs/PROD_DEPLOY_PLAN.md](docs/PROD_DEPLOY_PLAN.md)。
+详细生产部署方案见 [部署文档](docs/部署文档.md)。
 
 ## License
 
