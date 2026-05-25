@@ -1,5 +1,5 @@
 """
-server.py  (v3 — 完整 AI API 配置版)
+server.py  (v4 — 完整 AI API 配置版)
 =====================================
 
 支持多种 AI API 提供商：
@@ -31,7 +31,7 @@ from src.obsidian_writer import get_all_patterns, delete_pattern, VAULT_ROOT
 from src.rag_store import CHROMA_OK
 from src.web_crawler import crawl_and_import
 
-app = FastAPI(title="API Doc QA Bot", version="3.0.0")
+app = FastAPI(title="API Doc QA Bot", version="4.0.0")
 
 # 知识库Agent 单例
 _kb_agent = None
@@ -610,7 +610,7 @@ if __name__ == "__main__":
     agent_startup()
     
     print("=" * 50)
-    print("🚀 API Doc QA Bot v3.0 启动...")
+    print("🚀 API Doc QA Bot v4.0 启动...")
     print("📡 访问: http://localhost:8000")
     print("=" * 50)
     

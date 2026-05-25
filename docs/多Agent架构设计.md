@@ -1,6 +1,6 @@
 # 多Agent架构设计文档
 
-> 日期：2026-05-25 | 版本：v5.0.0
+> 日期：2026-05-25 | 版本：v4.0.0
 
 ---
 
@@ -57,7 +57,7 @@ classify_intent(question: str) -> str
 
 ### 2.4 位置
 
-`server.py` 内新增函数，在 `/api/ask` 路由入口处调用。
+`src/src/src/agents/kb_agent.py` 内实现，`server.py` 第 303 行 import 后调用。
 
 ---
 
@@ -65,7 +65,7 @@ classify_intent(question: str) -> str
 
 ### 3.1 设计思路
 
-将现有问答逻辑抽取为独立模块 `agents/kb_agent.py`，保持功能不变，结构更清晰。
+将现有问答逻辑抽取为独立模块 `src/src/agents/kb_agent.py`，保持功能不变，结构更清晰。
 
 ### 3.2 核心流程
 
@@ -84,13 +84,13 @@ classify_intent(question: str) -> str
 | 项目 | 现状 | 新设计 |
 |------|------|--------|
 | 硬约束拒答 | RAG 分数 < 3.0 直接拒答 | 移除。无检索结果也调 AI，AI 自己决定如何回应 |
-| 位置 | agent.py 内联 | agents/kb_agent.py 独立模块 |
+| 位置 | agent.py 内联 | src/src/agents/kb_agent.py 独立模块 |
 | 寒暄处理 | 被拒答 | AI 正常回复问候 |
 
 ### 3.4 文件结构
 
 ```
-agents/
+src/agents/
 ├── __init__.py
 ├── kb_agent.py      # 知识库Agent（从 agent.py 重构）
 └── biz_agent.py     # 业务Agent（预留占位）
@@ -145,7 +145,7 @@ server.py (/api/ask)
   │     ├─ "knowledge" → kb_agent.answer(question, session_id)
   │     │                   │
   │     │                   ├─ search_docs()  ← rag_store.py
-  │     │                   ├─ mem_recall()   ← mem0_manager.py
+  │     │                   ├─ mem_recall()   ← simple_memory.py
   │     │                   ├─ call_ai_api()  ← LLM
   │     │                   └─ learn()        ← obsidian_writer.py
   │     │
@@ -163,15 +163,15 @@ server.py (/api/ask)
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `agents/__init__.py` | 新增 | 包初始化 |
-| `agents/kb_agent.py` | 新增 | 从 agent.py 提取 RAG+AI 逻辑 |
-| `agents/biz_agent.py` | 新增 | 业务Agent占位 |
+| `src/agents/__init__.py` | 新增 | 包初始化 |
+| `src/src/agents/kb_agent.py` | 新增 | 从 agent.py 提取 RAG+AI 逻辑 |
+| `src/src/agents/biz_agent.py` | 新增 | 业务Agent占位 |
 | `server.py` | 修改 | 新增 classify_intent()，重构 /api/ask 路由到 Agent |
 | `agent.py` | 修改 | 精简为检索函数，Agent 逻辑移到 kb_agent.py |
 | `rag_store.py` | 不变 | 检索引擎 |
 | `doc_loader.py` | 不变 | 文档管理 |
 | `obsidian_writer.py` | 不变 | 日志与经验 |
-| `mem0_manager.py` | 不变 | 语义记忆 |
+| `simple_memory.py` | 不变 | 语义记忆 |
 
 ---
 
@@ -187,6 +187,6 @@ server.py (/api/ask)
 
 ## 八、扩展性
 
-- 新增Agent：只需在 `agents/` 目录新建文件，加一条路由规则
-- 业务Agent对接：`agents/biz_agent.py` 替换占位代码即可
+- 新增Agent：只需在 `src/src/agents/` 目录新建文件，加一条路由规则
+- 业务Agent对接：`src/src/agents/biz_agent.py` 替换占位代码即可
 - 意图分类升级：后续可换 LLM 分类，不影响 Agent 接口
