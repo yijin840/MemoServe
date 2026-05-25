@@ -88,6 +88,43 @@ server.py /api/ask
   └─ 返回 AskResponse
 ```
 
+### 多 Agent 架构
+
+系统采用三层 Agent 协同架构，职责分明、可扩展：
+
+```
+用户提问
+    │
+    ▼
+┌─────────────────────┐
+│   主Agent (路由层)    │  ← server.py + classify_intent()
+│   关键词规则分类      │     不调 LLM，零延迟，100% 可控
+└──────┬──────────────┘
+       │
+   ┌───┼───────────┬──────────┐
+   ▼   ▼           ▼          ▼
+greeting unknown  business  knowledge
+ (直返)  (直返)      │          │
+                    ▼          ▼
+              ┌──────────┐ ┌──────────────┐
+              │业务Agent  │ │ 知识库Agent   │  ← agents/
+              │biz_agent │ │ kb_agent     │
+              │(占位实现) │ │ Customer-    │
+              └──────────┘ │ ServiceAgent │
+                           └──────┬───────┘
+                                  │
+                    ┌─────────────┼─────────────┐
+                    ▼             ▼             ▼
+                 RAG检索      mem0记忆       LLM生成
+              (rag_store)  (mem0_manager) (call_ai_api)
+```
+
+| Agent | 触发条件 | 职责 | 状态 |
+|-------|----------|------|------|
+| **主Agent** | 所有请求 | 意图分类 + 路由分发，关键词规则（不调LLM） | ✅ |
+| **知识库Agent** | knowledge 意图 | RAG检索10个文档块 → mem0记忆注入 → LLM生成 → 学习归档 | ✅ |
+| **业务Agent** | business 意图 | 对接真实 API（充值/开卡/冻结等），当前占位返回"开发中" | 🚧 |
+
 ---
 
 ## 功能特性
