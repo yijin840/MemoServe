@@ -908,7 +908,7 @@ async def health():
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def serve_frontend():
     """返回前端聊天页面"""
-    html_path = os.path.join(os.path.dirname(__file__), "static", "index.html")
+    html_path = os.path.join(os.path.dirname(__file__), "..", "static", "index.html")
     if os.path.exists(html_path):
         with open(html_path, encoding="utf-8") as f:
             return HTMLResponse(content=f.read())
