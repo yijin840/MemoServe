@@ -39,3 +39,18 @@ venv.*
 /tmp/
 *.tmp
 *.bak
+
+# 环境变量文件
+.env
+.env_back
+
+# WorkBuddy 数据
+.workbuddy/
+
+# 运行日志
+logs/
+*.log
+
+# Docker
+Dockerfile
+docker-compose.yml
