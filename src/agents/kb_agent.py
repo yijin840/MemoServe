@@ -174,6 +174,20 @@ class CustomerServiceAgent:
         # Step 1+2: 检索记忆和 RAG
         t1 = time.time()
         doc_result = search_docs(question)
+        
+        # ★ 多主题反问：检索结果跨多个一级主题时，先让用户选择
+        if doc_result.get("clarify"):
+            topics = doc_result.get("clarify_topics", [])
+            options = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(topics))
+            clarify_msg = f"您的问题涉及多个方面，请问您想了解哪个？\n\n{options}\n\n请告诉我序号或直接描述您的需求。"
+            return {
+                "answer": clarify_msg,
+                "source": "clarify",
+                "doc_hits": doc_result["doc_hits"],
+                "confidence": 0.99,
+                "chunks_used": [],
+                "method": "clarify",
+            }
         try:
             memories = mem_recall(question, user_id, MEM0_TOP_K)
         except Exception:

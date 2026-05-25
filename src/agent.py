@@ -172,6 +172,30 @@ def answer(question: str) -> dict:
             deduped.append(h)
     hits = deduped[:10]
 
+    # ★ 多主题反问：检索到多个不同主题时，列出选项让用户选择
+    if len(hits) >= 2:
+        # 提取每个命中块的一级主题（title_path 第一段）
+        topics = []
+        for h in hits[:8]:
+            title = h['chunk'].get('title_path', '')
+            # 取第一级标题（按 > 或 / 分割）
+            top = title.split(' > ')[0].split(' / ')[0].strip()
+            if top and top not in topics:
+                topics.append(top)
+                if len(topics) >= 3:
+                    break
+        
+        # 2个以上不同的一级主题 → 反问
+        if len(topics) >= 2:
+            return {
+                "doc_hits": len(hits),
+                "confidence": 0.99,
+                "chunks_used": [],
+                "method": "clarify",
+                "clarify": True,
+                "clarify_topics": topics,
+            }
+
     method = hits[0]["method"] if hits else "none"
 
     return {
@@ -182,6 +206,7 @@ def answer(question: str) -> dict:
             for h in hits[:11]
         ],
         "method": method,
+        "clarify": False,
     }
 
 
