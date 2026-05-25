@@ -52,12 +52,12 @@
 
 ```
 classify_intent(question: str) -> str
-  返回: "knowledge" | "business" | "unknown"
+  返回: "greeting" | "knowledge" | "business" | "unknown"
 ```
 
 ### 2.4 位置
 
-`src/src/src/agents/kb_agent.py` 内实现，`server.py` 第 303 行 import 后调用。
+`src/agents/kb_agent.py` 内实现，`server.py` 第 303 行 import 后调用。
 
 ---
 
@@ -65,7 +65,7 @@ classify_intent(question: str) -> str
 
 ### 3.1 设计思路
 
-将现有问答逻辑抽取为独立模块 `src/src/agents/kb_agent.py`，保持功能不变，结构更清晰。
+将现有问答逻辑抽取为独立模块 `src/agents/kb_agent.py`，保持功能不变，结构更清晰。
 
 ### 3.2 核心流程
 
@@ -84,7 +84,7 @@ classify_intent(question: str) -> str
 | 项目 | 现状 | 新设计 |
 |------|------|--------|
 | 硬约束拒答 | RAG 分数 < 3.0 直接拒答 | 移除。无检索结果也调 AI，AI 自己决定如何回应 |
-| 位置 | agent.py 内联 | src/src/agents/kb_agent.py 独立模块 |
+| 位置 | agent.py 内联 | src/agents/kb_agent.py 独立模块 |
 | 寒暄处理 | 被拒答 | AI 正常回复问候 |
 
 ### 3.4 文件结构
@@ -92,8 +92,8 @@ classify_intent(question: str) -> str
 ```
 src/agents/
 ├── __init__.py
-├── src/agents/kb_agent.py      # 知识库Agent（从 agent.py 重构）
-└── src/agents/biz_agent.py     # 业务Agent（预留占位）
+├── kb_agent.py      # 知识库Agent（从 agent.py 重构）
+└── biz_agent.py     # 业务Agent（预留占位）
 ```
 
 ### 3.5 检索后处理（当前行为）
@@ -121,7 +121,7 @@ src/agents/
 ### 4.2 当前占位实现
 
 ```python
-def handle_business(question: str) -> dict:
+async def handle(question: str, session_id: str = "", **kwargs) -> dict:
     return {
         "answer": "抱歉，该功能正在开发中。如需充值或开卡，请登录管理后台操作。",
         "source": "biz_agent"
@@ -144,9 +144,9 @@ server.py (/api/ask)
   │
   ├─ classify_intent(question)
   │     │
-  │     ├─ "knowledge" → kb_agent.answer(question, session_id)
+  │     ├─ "knowledge" → kb_agent.chat(question=question, user_id=user_id, session_id=session_id, call_ai=call_ai_api)
   │     │                   │
-  │     │                   ├─ search_docs()  ← rag_store.py
+  │     │                   ├─ search_docs()  ← src/agent.py (TF-IDF + ChromaDB)
   │     │                   ├─ mem_recall()   ← mem0_manager.py
   │     │                   ├─ call_ai_api()  ← LLM
   │     │                   └─ learn()        ← obsidian_writer.py
@@ -210,8 +210,8 @@ if len(topics) >= 2:
 | 文件 | 操作 | 说明 |
 |------|------|------|
 | `src/agents/__init__.py` | 新增 | 包初始化 |
-| `src/src/agents/kb_agent.py` | 新增 | 从 agent.py 提取 RAG+AI 逻辑 |
-| `src/src/agents/biz_agent.py` | 新增 | 业务Agent占位 |
+| `src/agents/kb_agent.py` | 新增 | 从 agent.py 提取 RAG+AI 逻辑 |
+| `src/agents/biz_agent.py` | 新增 | 业务Agent占位 |
 | `server.py` | 修改 | 导入 classify_intent()，重构 /api/ask 路由到 Agent |
 | `src/agent.py` | 修改 | 精简为检索函数，Agent 逻辑移到 kb_agent.py |
 | `rag_store.py` | 不变 | 检索引擎 |
@@ -226,13 +226,13 @@ if len(topics) >= 2:
 | 问题 | 修复方式 |
 |------|----------|
 | BUG-01 寒暄被拦截 | 移除 RAG 分数硬约束，"你好"正常调 AI，AI 自回问候 |
-| BUG-02 时间戳矛盾 | 后续在 system_prompt 补充单位说明 |
+| BUG-02 时间戳矛盾 | 已在 system_prompt 补充毫秒/秒单位区分（第56-58行） |
 | BUG-03 mem0 未生效 | 后续换本地 embedding 模型 |
 
 ---
 
 ## 八、扩展性
 
-- 新增Agent：只需在 `src/src/agents/` 目录新建文件，加一条路由规则
-- 业务Agent对接：`src/src/agents/biz_agent.py` 替换占位代码即可
+- 新增Agent：只需在 `src/agents/` 目录新建文件，加一条路由规则
+- 业务Agent对接：`src/agents/biz_agent.py` 替换占位代码即可
 - 意图分类升级：后续可换 LLM 分类，不影响 Agent 接口
