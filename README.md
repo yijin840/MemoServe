@@ -66,7 +66,48 @@ classify_intent()  ──→  greeting    →  硬编码友好问候
 | business | 我要充值、我要开卡、查余额 | 返回"功能开发中" | `biz_agent.py` |
 | knowledge | 默认 | RAG 检索 → 多主题检测 → LLM 生成 | `kb_agent.py:148` |
 
-> **多主题反问**：检索命中跨不同一级主题时（如「KYC」同时命中「概念说明」和「API 接口」），先列出选项反问用户，不浪费 AI 调用。
+### 多主题反问（P1-04）
+
+当用户模糊提问（如只输入「KYC」），检索命中多个不相干的一级主题时，系统不直接回答，而是列出选项反问用户确认。
+
+**实现原理：**
+
+```
+search_docs("KYC")
+  │
+  ▼
+去重后的 Top 8 命中块
+  │  title_path = "Card issuing API 文档 > KYC > 提交用户 KYC 数据"
+  │  title_path = "KYC — 搜索导入 > 来源 3"
+  ▼
+提取一级主题（按 " > " 分割取第一段）
+  │  "Card issuing API 文档"
+  │  "KYC — 搜索导入"
+  ▼
+统计不同主题数 ≥ 2？
+  │  是 → 返回 clarify，反问用户
+  │  否 → 继续走 RAG + LLM 生成
+```
+
+**关键代码**（`src/agent.py`）：
+```python
+# 提取每个命中块的一级主题
+topics = []
+for h in hits[:8]:
+    title = h['chunk'].get('title_path', '')
+    top = title.split(' > ')[0]       # 取第一段
+    if top and top not in topics:
+        topics.append(top)
+
+# ≥2 个不同一级主题 → 反问
+if len(topics) >= 2:
+    return {"clarify": True, "clarify_topics": topics}
+```
+
+`src/agents/kb_agent.py` 收到 `clarify=True` 后**不调 AI，零延迟**直接返回反问语。
+
+**示例：**
+- 问「KYC」→ "您想了解 KYC 概念说明，还是 Card issuing API 的 KYC 接口？"
 
 ### 数据流（完整）
 
