@@ -1,203 +1,328 @@
-# mem0-demo 智能客服系统
-
-基于 [mem0](https://github.com/mem0ai/mem0) 记忆管理的智能客服系统 Demo，支持多意图路由、RAG 知识库检索、Telegram Bot 接入。
-
-## 项目结构
-
-```
-.
-├── app/                      # 应用主包
-│   ├── __init__.py
-│   ├── main.py                  # FastAPI 入口 + 生命周期管理
-│   ├── config/
-│   │   └── __init__.py        # 全局配置（环境变量加载）
-│   ├── router_agent.py          # 意图分类器（IntentClassifier）
-│   ├── knowledge_agent.py       # 知识库 Agent（CustomerServiceAgent）
-│   ├── rag_knowledge_base.py   # ChromaDB 向量检索
-│   ├── memory_manager.py        # mem0 记忆管理
-│   ├── answer_cache.py          # 问答缓存（双模式：精确 + 语义）
-│   ├── telegram_bot.py         # Telegram Bot 接入
-│   └── prod_grounding_check.py # 生产环境答案真实性校验
-├── scripts/                  # 部署与运行脚本
-│   ├── deploy.sh              # 一键部署脚本（交互式/dev/prod）
-│   └── run.sh                # 启动/停止/重启管理脚本
-├── static/
-│   └── index.html          # Web 聊天界面
-├── data/
-│   └── knowledge/          # 知识库文档（热加载）
-└── docs/                   # 项目文档
-    ├── 多Agent架构设计.md   # 多 Agent 架构设计文档
-    ├── 真实测试用例集.md     # 真实场景测试用例集
-    ├── 问题清单.md           # 已知问题清单与修复方案
-    ├── 项目总结.md           # 项目总结
-    └── 部署文档.md           # 部署文档
-```
-
-**启动方式：**
-```bash
-# 开发模式（热重载）
-uvicorn app.main:app --reload
-
-# 生产模式
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
-```
-
-## 功能特性
-
-- **多意图路由**：自动分类用户问题（greeting / faq / crypto_topup / technical_concept / unknown）
-- **RAG 知识库**：基于 ChromaDB 的向量检索，支持热加载文档
-- **mem0 记忆管理**：持久化用户画像和对话历史
-- **问答缓存**：精确匹配 + 语义相似度双模式缓存，降低延迟和成本
-- **流式对话**：SSE（Server-Sent Events）流式返回
-- **Telegram Bot**：支持多群映射，每个群独立 user_id
-- **答案真实性校验**：生产环境可选启用 grounding 校验
-
-## 快速开始
-
-### 1. 安装依赖
-
-```bash
-pip install -r requirements.txt
-```
-
-### 2. 配置环境变量
-
-复制 `.env.example` 为 `.env` 并填写：
-
-```bash
-cp .env.example .env
-```
-
-关键配置项：
-
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `DASHSCOPE_API_KEY` | DashScope API Key（阿里云） | 必填 |
-| `TELEGRAM_BOT_TOKEN` | Telegram Bot Token | 可选 |
-| `RAG_SCORE_THRESHOLD` | RAG 检索阈值 | 0.4 |
-| `MEM0_SCORE_THRESHOLD` | mem0 记忆检索阈值 | 0.3 |
-| `CACHE_TTL` | 缓存 TTL（秒） | 3600 |
-| `CACHE_SEMANTIC_THRESHOLD` | 语义缓存阈值 | 0.92 |
-
-### 3. 启动服务
-
-```bash
-python main.py
-```
-
-访问 http://localhost:8000 查看 Web 界面。
-
-### 4. 启动 Telegram Bot（可选）
-
-```bash
-# 在 .env 中配置 TELEGRAM_BOT_TOKEN 后
-python telegram_bot.py
-```
-
-## API 接口
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/chat` | 普通对话 |
-| GET | `/chat/stream` | SSE 流式对话 |
-| POST | `/knowledge/add` | 上传文本到知识库 |
-| POST | `/knowledge/search-and-add` | 搜索并导入知识库 |
-| POST | `/knowledge/file` | 上传文件到知识库 |
-| GET | `/knowledge/list` | 查看知识库来源列表 |
-| DELETE | `/knowledge/` | 删除知识库来源 |
-| GET | `/memory/{user_id}` | 查看用户记忆 |
-| DELETE | `/memory/{user_id}` | 清除用户记忆 |
-| GET | `/health` | 健康检查 |
-
-## 架构说明
-
-```
-User → FastAPI(/chat) → IntentClassifier(router_agent.py)
-                               │
-                   ┌─────────┴─────────┐
-                greeting          faq / crypto_topup / technical_concept
-                   │                  │
-             预设响应          KnowledgeAgent(knowledge_agent.py)
-                                  │
-                ┌─────────────────┼─────────────────┐
-             RAG(ChromaDB)   Memory(mem0)      Tool(save_memory)
-```
-
-**意图分类**（router_agent.py）：
-- `greeting`：问候语，返回预设响应
-- `faq`：常见问题，走知识库检索
-- `crypto_topup`：稳定币充值类问题，走知识库检索
-- `technical_concept`：API 抽象概念（幂等性、签名等），走知识库检索
-- `unknown`：未知意图，返回兜底响应
-
-**知识库检索**（rag_knowledge_base.py）：
-- 使用 ChromaDB 做向量检索
-- 支持 `add_texts()` 热加载
-- `similarity_search()` 返回相似度分数
-
-**记忆管理**（memory_manager.py）：
-- 使用 mem0 管理用户记忆
-- `add_memory()` 添加记忆
-- `search_memory()` 检索相关记忆
-- 对话记录自动归档到 `conv_archive` collection
-
-## 文档导航
-
-项目 `docs/` 目录包含以下文档，点击查看详情：
-
-### [🏗️ 多Agent架构设计](docs/多Agent架构设计.md)
-
-多 Agent 架构设计文档，包括：
-- 架构概览（主Agent路由层 + 知识库Agent + 业务Agent）
-- 意图分类设计（关键词规则、分类函数签名、三层 Agent 职责）
-- 知识库 Agent 核心流程（RAG 检索 + AI 回答、检索后处理）
-- 业务 Agent 预留设计（后续对接真实 API）
-- 数据流图、改动清单、已知问题列表
-
-### [🧪 真实测试用例集](docs/真实测试用例集.md)
-
-基于真实场景的测试用例，包括：
-- 第一部分：单轮基础测试（TC-01 ~ TC-10），覆盖寒暄、KYC 材料咨询、业务外话题、虚拟卡 vs 实体卡对比等
-- 第二部分：多轮连续对话测试（8 轮），模拟开发者从初次咨询到排查 API 401 错误的完整流程
-- 每例包含：用户问题、客服实际回答、测试要点、通过/失败判定
-- 测试结论汇总与和原系统对比
-
-### [🐛 问题清单与修复方案](docs/问题清单.md)
-
-已知问题清单，按优先级（P0/P1/P2）排列，每个问题包含：
-- 现象描述
-- 根因分析
-- 具体修复方案（含代码改动位置和示例）
-- 验证方法
-- 覆盖问题：RAG 硬约束误杀、上下文爆炸、检索无 token 预算、时间戳单位矛盾、mem0 不工作、意图分类准确率、多主题匹配未反问、biz_agent 空壳等
-
-### [📋 项目总结](docs/项目总结.md)
-
-项目阶段性总结，包括：
-- 已完成功能清单
-- 技术架构概述
-- 已知问题概览
-- 后续迭代方向
-
-### [🚀 部署文档](docs/部署文档.md)
-
-部署相关文档，包括：
-- 一键部署脚本使用说明
-- Docker / Docker Compose 部署
-- systemd 服务配置
-- 环境变量配置说明
+# ============================================================
+# PayCrypto API 智能客服系统
+# ============================================================
+#
+# 项目简介
+# ----------
+# 基于 RAG（检索增强生成）的 API 文档智能问答系统。
+# 支持多 Agent 架构：意图分类 → 知识库 Agent / 业务 Agent。
+# 内置文档检索（TF-IDF 关键词 + 可选 Chroma 向量检索）、
+# 会话记忆（simple_memory / mem0）、自主学习（经验模式提炼）等功能。
+#
+# 适用场景
+# ----------
+# - API 文档智能问答（技术支持机器人）
+# - 企业内部知识库问答
+# - 需要结合文档检索 + LLM 的客服场景
+#
+# 技术栈
+# ----------
+# - 后端：Python 3.9+ / FastAPI / Uvicorn
+# - 前端：原生 HTML + CSS + Vanilla JS（无框架依赖）
+# - LLM：OpenAI 兼容接口（支持 OpenAI / DeepSeek / 智谱 等）
+# - 向量检索：ChromaDB + sentence-transformers（可选）
+# - 部署：单机运行，无需 Docker
+#
+# ============================================================
 
 
-## 生产部署注意事项
+# ------------------------------------------------------------
+# 1. 系统架构
+# ------------------------------------------------------------
 
-1. **提高 RAG 阈值**：生产环境建议 `RAG_SCORE_THRESHOLD=0.65`（默认 0.4 太低）
-2. **启用 JWT 认证**：`/chat` 接口的 `user_id` 当前由前端随意传递，生产环境必须启用 JWT 认证
-3. **启用答案缓存**：取消 `knowledge_agent.py` 222-228 行和 381-389 行的注释
-4. **GROUP_USER_MAP 持久化**：`telegram_bot.py` 的群映射当前仅内存存储，重启后丢失，需改为 JSON 文件读写
-5. **流式对话记忆**：`stream_chat()` 方法当前不保存记忆，需补充
+# 多 Agent 架构设计：
 
-详细生产部署方案见 [部署文档](docs/部署文档.md)。
+#                    ┌─────────────────────┐
+#                    │   前端 (浏览器)      │
+#                    │  static/index.html  │
+#                    └─────────┬───────────┘
+#                              │ HTTP / JSON
+#                              ▼
+#                    ┌─────────────────────┐
+#                    │   FastAPI 路由层     │
+#                    │  server.py /api/ask │
+#                    └─────────┬───────────┘
+#                              │
+#                  ┌───────────┴────────────┐
+#                  │   意图分类 (classify_intent)  │
+#                  └───────────┬────────────┘
+#               ┌───────┬───────┬──────────┬────────┐
+#               ▼       ▼       ▼          ▼        ▼
+#            greeting  info   unknown   business  knowledge
+#                                  │          │
+#                            ┌─────┴─────┐  ┌───┴──────────┐
+#                            │  biz_agent  │  │  kb_agent       │
+#                            │  (占位实现)  │  │  Customer-    │
+#                            └────────────┘  │  ServiceAgent   │
+#                                            └────┬──────────┘
+#                                                 │
+#                              ┌──────────────────┼──────────────┐
+#                              ▼                  ▼              ▼
+#                         RAG 检索        记忆检索        LLM 调用
+#                        (rag_store)      (simple_      (call_ai_api)
+#                                            memory)
 
-## License
 
-MIT
+# 核心模块说明：
+
+# server.py         — FastAPI 应用入口，路由定义，AI API 配置管理
+# agent.py           — 文档检索协调层，DSPy 优化模块（可选）
+# agents/
+#   __init__.py     — Agent 包导出
+#   kb_agent.py      — 知识库 Agent（CustomerServiceAgent）
+#   biz_agent.py     — 业务 Agent（占位，待对接真实 API）
+# doc_loader.py      — Markdown 文档加载器，按标题切块
+# rag_store.py       — RAG 检索层（TF-IDF 降级 / Chroma 向量检索）
+# obsidian_writer.py — 问答日志、经验模式写入 Obsidian vault
+# simple_memory.py   — 本地轻量记忆管理（sentence-transformers）
+# mem0_manager.py   — mem0 记忆管理（可选，需 API 兼容）
+# web_crawler.py    — 搜索导入爬虫（DuckDuckGo + BS4）
+# regression_test.py — 回归测试脚本
+# static/
+#   index.html       — 前端单页应用（聊天界面）
+
+
+# ------------------------------------------------------------
+# 2. 功能特性
+# ------------------------------------------------------------
+
+# [x] 多 Agent 意图分类（greeting / info_provide / knowledge / business / unknown）
+# [x] RAG 文档检索（TF-IDF 关键词 + Chroma 向量检索可选）
+# [x] 支持多种 LLM 提供商（OpenAI / DeepSeek / 智谱 / 自定义兼容接口）
+# [x] 会话记忆（按 user_id 隔离，支持 simple_memory 或 mem0）
+# [x] 自主学习（自动提炼经验模式到 patterns.json）
+# [x] 文档动态导入（URL 下载 / 本地上传 / 搜索导入）
+# [x] 前端 Markdown 渲染（标题 / 加粗 / 代码块 / 表格 / 引用）
+# [x] 多轮对话支持（按 session_id 隔离历史）
+# [x] 回归测试脚本
+# [x] 日志自动清理（超过 30 天自动删除）
+
+
+# ------------------------------------------------------------
+# 3. 项目结构
+# ------------------------------------------------------------
+
+# dspy/
+# ├── server.py              # FastAPI 入口
+# ├── agent.py               # 检索协调 + DSPy 优化
+# ├── agents/
+# │   ├── __init__.py
+# │   ├── kb_agent.py       # 知识库 Agent
+# │   └── biz_agent.py     # 业务 Agent
+# ├── doc_loader.py         # 文档加载 + 切块
+# ├── rag_store.py          # RAG 检索层
+# ├── obsidian_writer.py    # Obsidian 日志写入
+# ├── simple_memory.py      # 本地记忆管理
+# ├── mem0_manager.py       # mem0 管理器（可选）
+# ├── web_crawler.py        # 搜索导入爬虫
+# ├── regression_test.py     # 回归测试
+# ├── requirements.txt       # Python 依赖
+# ├── api_config.json       # AI 配置（不提交，见 .gitignore）
+# ├── memory_store.json     # 本地记忆存储（不提交）
+# ├── docs_cache/           # 文档缓存（不提交）
+# ├── chroma_db/            # Chroma 向量库（不提交）
+# ├── mem0_db/              # mem0 数据库（不提交）
+# ├── obsidian_vault/       # Obsidian vault（不提交）
+# └── static/
+#     └── index.html        # 前端页面
+
+
+# ------------------------------------------------------------
+# 4. 安装部署
+# ------------------------------------------------------------
+
+# 4.1 环境要求
+#   - Python 3.9+
+#   - pip / venv
+
+# 4.2 安装依赖
+#   $ cd /path/to/dspy
+#   $ pip3 install -r requirements.txt
+
+# 4.3 配置 AI API
+#   复制配置模板（如有），或首次启动后通过前端「AI 设置」页面配置：
+#
+#   {
+#     "provider": "custom",
+#     "api_key": "YOUR_API_KEY_HERE",
+#     "base_url": "https://your-api-endpoint/v1",
+#     "model": "your-model-name",
+#     "temperature": 0.7,
+#     "max_tokens": 2048,
+#     "top_p": 1.0,
+#     "enabled": true
+#   }
+#
+#   支持的 provider：openai / anthropic / siliconflow / deepseek / qwen / zhipu / custom
+
+# 4.4 启动服务
+#   $ python3 server.py
+#   访问：http://localhost:8000
+
+# 4.5 可选：启用向量检索
+#   $ pip3 install chromadb sentence-transformers
+#   重启服务即可自动启用 Chroma 向量检索
+
+
+# ------------------------------------------------------------
+# 5. 配置说明（api_config.json）
+# ------------------------------------------------------------
+
+# 字段名           类型      说明
+# provider         str       提供商：openai / anthropic / siliconflow / deepseek / qwen / zhipu / custom
+# api_key          str       API 密钥（勿提交到 git）
+# base_url         str       自定义 API 地址（provider=custom 时必填）
+# model            str       模型名称
+# temperature      float    温度参数，0.0-2.0，默认 0.7
+# max_tokens       int      最大输出 token 数，默认 2048
+# top_p            float    nucleus sampling，0.0-1.0，默认 1.0
+# frequency_penalty  float  频率惩罚，默认 0.0
+# presence_penalty   float  存在惩罚，默认 0.0
+# enabled          bool     是否启用 AI，默认 false
+# system_prompt    str       自定义 system prompt（可选）
+
+
+# ------------------------------------------------------------
+# 6. API 接口文档
+# ------------------------------------------------------------
+
+# POST /api/ask
+#   请求体：{"question": "用户问题", "session_id": "会话ID"}
+#   响应体：{
+#     "answer": "回答内容",
+#     "source": "ai",
+#     "doc_hits": 10,
+#     "confidence": 0.8,
+#     "chunks_used": [{"title_path": "...", "score": 15.2, "content": "..."}],
+#     "method": "keyword"
+#   }
+
+# GET  /api/health
+#   响应体：{"status": "ok", "rag_enabled": true, "doc_chunks": 115, ...}
+
+# GET  /api/config
+
+# POST /api/config
+
+# POST /api/config/test
+
+# POST /api/docs/import
+
+# POST /api/docs/upload
+
+# POST /api/docs/crawl
+
+# DELETE /api/docs/remove?name=...
+
+# DELETE /api/docs/reset
+
+# GET  /api/patterns
+
+# POST /api/summary
+
+# DELETE /api/patterns/{pattern_id}
+
+# GET  /api/vault/files
+
+# GET  /api/vault/read?folder=...&name=...
+
+# DELETE /api/vault/delete?folder=...&name=...
+
+
+# ------------------------------------------------------------
+# 7. 前端使用说明
+# ------------------------------------------------------------
+
+# - 打开 http://localhost:8000
+# - 在输入框输入 API 相关问题，回车发送
+# - 侧边栏可查看文档管理、AI 设置
+# - 快捷提问按钮可快速测试常见场景
+# - 消息气泡下方显示：来源标签、文档命中数、检索方式、置信度
+
+
+# ------------------------------------------------------------
+# 8. 测试
+# ------------------------------------------------------------
+
+# 运行回归测试（需先启动服务）：
+#   $ python3 regression_test.py
+
+# 测试覆盖：
+# - 单轮意图分类（greeting / knowledge / unknown / business）
+# - 多轮对话上下文记忆
+# - 文档检索命中率
+# - API 接口连通性
+
+
+# ------------------------------------------------------------
+# 9. 开发说明
+# ------------------------------------------------------------
+
+# 文档切块逻辑：doc_loader.py → split_markdown()
+#   - 按 Markdown 标题（## / ###）切分
+#   - 每块不超过 max_chars（默认 1200）字符
+#   - 超长块按段落（\n\n）二次切分
+
+# RAG 检索逻辑：rag_store.py → search_docs()
+#   - 优先 Chroma 向量检索（若依赖已安装）
+#   - 降级为 TF-IDF 关键词检索
+
+# 意图分类逻辑：agents/kb_agent.py → classify_intent()
+#   - 关键词规则匹配
+#   - 返回：greeting / info_provide / knowledge / business / unknown
+
+# 会话记忆：simple_memory.py
+#   - 使用 sentence-transformers 本地模型向量化
+#   - 按 user_id 隔离存储到 memory_store.json
+#   - 可选替换为 mem0（需 API 兼容）
+
+
+# ------------------------------------------------------------
+# 10. 注意事项 / 已知问题
+# ------------------------------------------------------------
+
+# [!] api_config.json 包含 API Key，已加入 .gitignore，请勿手动提交
+# [!] memory_store.json / obsidian_vault/ 包含会话数据，已加入 .gitignore
+# [!] chroma_db/ / mem0_db/ 为本地向量库，已加入 .gitignore
+# [!] 使用第三方兼容 API 时，请注意其是否支持 top_p 参数
+# [!] mem0 需要 OpenAI 格式嵌入接口，部分第三方 API 不兼容
+
+# 已知问题（BUG）：
+# - BUG-02：文档中 HMAC 时间戳单位描述不一致（毫秒 vs 秒），已加 Prompt 约束
+# - BUG-03：mem0 与部分第三方 API 不兼容（已降级为 simple_memory）
+
+
+# ------------------------------------------------------------
+# 11. 版本历史
+# ------------------------------------------------------------
+
+# v4.0.0  (2026-05-25)
+#   - 多 Agent 架构重构（意图分类 + 子 Agent 路由）
+#   - 修复 Markdown h4 渲染缺失
+#   - 修复表格 HTML 转义问题
+#   - 增加 MAX_RAG_CHARS 预算控制
+#   - 增加时间戳单位 Prompt 约束
+
+# v3.0.0  (2026-05-XX)
+#   - 接入真实 LLM API（替代模拟回答）
+#   - 支持多提供商配置
+#   - 前端 UI 重构
+
+# v2.0.0  (2026-05-XX)
+#   - 加入 RAG 检索
+#   - 加入文档动态导入
+
+# v1.0.0  (2026-04-XX)
+#   - 初始版本，基础问答功能
+
+
+# ------------------------------------------------------------
+# 12. License
+# ------------------------------------------------------------
+
+# MIT License
+
+
+# ============================================================
+# 文档结束
+# ============================================================
