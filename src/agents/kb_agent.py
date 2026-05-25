@@ -83,7 +83,7 @@ RAG_EMPTY = """
 # ══════════════════════════════════════════
 
 def classify_intent(question: str) -> str:
-    """关键词规则意图分类。返回 greeting | info_provide | knowledge | business | unknown"""
+    """关键词规则意图分类。返回 greeting | knowledge | business | unknown"""
     text = question.lower().strip()
 
     # 1. 寒暄：短问候直接回
@@ -91,23 +91,18 @@ def classify_intent(question: str) -> str:
     if text in greeting or (len(text) <= 6 and any(text.startswith(g) for g in ["你好", "hi", "hello"])):
         return "greeting"
 
-    # 2. 信息提供类（不是提问，是给用户确认）
-    info_kw = ["我叫", "公司叫", "我们公司", "已配置", "已经配置", "测试环境", "我司是", "我们的", "是", "配置好了"]
-    if any(k in question for k in info_kw):
-        return "info_provide"
-
-    # 3. 业务无关
+    # 2. 业务无关
     reject_kw = ["天气", "比特币", "股票", "唱歌", "讲笑话", "预测", "price", "weather", "bitcoin", "stock", "joke", "song"]
     if any(k in text for k in reject_kw):
         return "unknown"
 
-    # 4. 业务操作
+    # 3. 业务操作
     biz_kw = ["我要充值", "我要开卡", "查余额", "帮我冻结", "帮我解冻",
               "recharge", "open card", "freeze", "unfreeze"]
     if any(k in text for k in biz_kw):
         return "business"
 
-    # 5. 默认：知识问答
+    # 4. 默认：知识问答（包含信息提供类，交给 AI 自行判断如何回应）
     return "knowledge"
 
 
@@ -183,12 +178,14 @@ class CustomerServiceAgent:
             # 强制同时检索 HMAC 块和查询接口块
             result_hmac = search_docs("HMAC 签名 时间戳 毫秒")
             result_query = search_docs("查询接口 时间戳 秒 former_time latter_time")
-            # 合并结果，去重
-            seen = {c["id"] for c in chunks}
+            # 合并结果，去重（兼容不同 chunk 结构的 id 字段名）
+            def _chunk_key(c):
+                return c.get("id") or c.get("chunk_id") or c.get("title_path", "")
+            seen = {_chunk_key(c) for c in chunks}
             for c in result_hmac.get("chunks_used", []) + result_query.get("chunks_used", []):
-                if c["id"] not in seen:
+                if _chunk_key(c) not in seen:
                     chunks.append(c)
-                    seen.add(c["id"])
+                    seen.add(_chunk_key(c))
 
 
         # 构建 RAG 上下文（带预算控制）

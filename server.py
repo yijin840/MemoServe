@@ -311,12 +311,6 @@ async def api_ask(req: AskRequest):
             source="ai", doc_hits=0, confidence=1.0, chunks_used=[], method="greeting",
         )
 
-    if intent == "info_provide":
-        return AskResponse(
-            answer=f"收到，{req.question}。请问接下来需要我协助什么？",
-            source="confirm", doc_hits=0, confidence=1.0, chunks_used=[], method="confirm",
-        )
-
     if intent == "unknown":
         return AskResponse(
             answer="不好意思，这个问题不在我的服务范围内。您可以试试问 KYC 认证、充提币、发卡、HMAC 签名等问题。",
