@@ -92,8 +92,8 @@ classify_intent(question: str) -> str
 ```
 src/agents/
 ├── __init__.py
-├── kb_agent.py      # 知识库Agent（从 agent.py 重构）
-└── biz_agent.py     # 业务Agent（预留占位）
+├── src/agents/kb_agent.py      # 知识库Agent（从 agent.py 重构）
+└── src/agents/biz_agent.py     # 业务Agent（预留占位）
 ```
 
 ### 3.5 检索后处理（当前行为）
@@ -212,8 +212,8 @@ if len(topics) >= 2:
 | `src/agents/__init__.py` | 新增 | 包初始化 |
 | `src/src/agents/kb_agent.py` | 新增 | 从 agent.py 提取 RAG+AI 逻辑 |
 | `src/src/agents/biz_agent.py` | 新增 | 业务Agent占位 |
-| `server.py` | 修改 | 新增 classify_intent()，重构 /api/ask 路由到 Agent |
-| `agent.py` | 修改 | 精简为检索函数，Agent 逻辑移到 kb_agent.py |
+| `server.py` | 修改 | 导入 classify_intent()，重构 /api/ask 路由到 Agent |
+| `src/agent.py` | 修改 | 精简为检索函数，Agent 逻辑移到 kb_agent.py |
 | `rag_store.py` | 不变 | 检索引擎 |
 | `doc_loader.py` | 不变 | 文档管理 |
 | `obsidian_writer.py` | 不变 | 日志与经验 |
