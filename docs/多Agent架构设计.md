@@ -145,7 +145,7 @@ server.py (/api/ask)
   │     ├─ "knowledge" → kb_agent.answer(question, session_id)
   │     │                   │
   │     │                   ├─ search_docs()  ← rag_store.py
-  │     │                   ├─ mem_recall()   ← simple_memory.py
+  │     │                   ├─ mem_recall()   ← mem0_manager.py
   │     │                   ├─ call_ai_api()  ← LLM
   │     │                   └─ learn()        ← obsidian_writer.py
   │     │
@@ -171,7 +171,7 @@ server.py (/api/ask)
 | `rag_store.py` | 不变 | 检索引擎 |
 | `doc_loader.py` | 不变 | 文档管理 |
 | `obsidian_writer.py` | 不变 | 日志与经验 |
-| `simple_memory.py` | 不变 | 语义记忆 |
+| `mem0_manager.py` | 不变 | 语义记忆 |
 
 ---
 
