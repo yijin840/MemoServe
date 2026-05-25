@@ -8,6 +8,7 @@ api_config.json
 memory_store.json
 
 # 个人数据目录
+.workbuddy/
 obsidian_vault/
 docs_cache/
 chroma_db/
