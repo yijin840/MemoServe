@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 from src.agent import answer as search_docs
 from src.agent import learn, get_all_patterns
-from src.simple_memory import recall as mem_recall, remember as mem_remember
+from src.mem0_manager import recall as mem_recall, remember as mem_remember
 
 # ══════════════════════════════════════════
 # 常量
