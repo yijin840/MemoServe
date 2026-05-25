@@ -64,7 +64,9 @@ classify_intent()  ──→  greeting    →  硬编码友好问候
 | greeting | 你好、您好、hello、hi、谢谢、再见 | 返回"您好，有什么可以帮您？" | `kb_agent.py:85` |
 | unknown | 天气、比特币、股票、预测 | 返回拒答引导语 | `kb_agent.py:98` |
 | business | 我要充值、我要开卡、查余额 | 返回"功能开发中" | `biz_agent.py` |
-| knowledge | 默认 | RAG 检索 + LLM 生成 | `kb_agent.py:148` |
+| knowledge | 默认 | RAG 检索 → 多主题检测 → LLM 生成 | `kb_agent.py:148` |
+
+> **多主题反问**：检索命中跨不同一级主题时（如「KYC」同时命中「概念说明」和「API 接口」），先列出选项反问用户，不浪费 AI 调用。
 
 ### 数据流（完整）
 
@@ -133,7 +135,7 @@ greeting unknown  business  knowledge
 - 自动检索文档并生成中文/英文回答
 - 回答包含 API 地址、方法、完整参数表、错误码、示例代码
 - 知识库外的问题直接礼貌拒答，不编造内容
-- 模糊问题主动追问确认场景
+- 模糊问题主动追问确认场景（如问「KYC」会反问是想了解概念还是查API接口）
 - 同一会话内支持 6 轮对话上下文关联
 - 每条回答标注置信度和匹配的文档片段
 
@@ -385,6 +387,7 @@ python3 -B tests/regression_test.py
 - AI 设置面板（7 种提供商 + 连接测试）
 - 文档动态管理（上传/URL/搜索导入）
 - 前端响应式布局
+- 多主题反问（P1-04）：检索跨主题时先反问确认，不浪费 AI 调用
 - `info_provide` 意图移除（修复 echo 问题）
 - 英文提问语言自适应
 - 工程化目录结构 `src/` + `tests/`
