@@ -118,9 +118,11 @@ def split_markdown(text: str, source_name: str, source_url: str = "", max_chars:
                         if not title_path:
                             title_path = source_name
                         cid = f"{source_name.replace(' ', '_')}_{chunk_idx:04d}"
+                        cat = title_path.split(" > ")[0]
                         chunks.append({
                             "id": cid,
                             "title_path": title_path,
+                            "category": cat,
                             "content": seg_body,
                             "source": source_name,
                             "url": source_url,
@@ -138,9 +140,11 @@ def split_markdown(text: str, source_name: str, source_url: str = "", max_chars:
                     if not title_path:
                         title_path = source_name
                     cid = f"{source_name.replace(' ', '_')}_{chunk_idx:04d}"
+                    cat = title_path.split(" > ")[0]
                     chunks.append({
                         "id": cid,
                         "title_path": title_path,
+                        "category": cat,
                         "content": seg_body,
                         "source": source_name,
                         "url": source_url,
@@ -153,9 +157,11 @@ def split_markdown(text: str, source_name: str, source_url: str = "", max_chars:
         if not title_path:
             title_path = source_name
         cid = f"{source_name.replace(' ', '_')}_{chunk_idx:04d}"
+        cat = title_path.split(" > ")[0]
         chunks.append({
             "id": cid,
             "title_path": title_path,
+            "category": cat,
             "content": body,
             "source": source_name,
             "url": source_url,
@@ -203,6 +209,7 @@ def split_markdown(text: str, source_name: str, source_url: str = "", max_chars:
                     new_chunks.append({
                         "id": cid,
                         "title_path": c["title_path"],
+                        "category": c["title_path"].split(" > ")[0],
                         "content": seg,
                         "source": source_name,
                         "url": source_url,

@@ -111,40 +111,46 @@ def sync_chunks_to_vector(chunks: list[dict]):
         ids   = [c["id"] for c in batch]
         texts = [c["title_path"] + "\n" + c["content"][:400] for c in batch]
         metas = [{"source": c["source"], "title_path": c["title_path"],
-                  "url": c.get("url", ""), "content": c["content"][:800]} for c in batch]
+                  "url": c.get("url", ""), "content": c["content"][:800],
+                  "category": c.get("category", "")} for c in batch]
         embeds = _embedder.encode(texts).tolist()
         _collection.upsert(ids=ids, embeddings=embeds, documents=texts, metadatas=metas)
     print(f"[RAG] 同步 {len(chunks)} 个文档块到向量库")
 
 
-def semantic_search(query: str, top_k: int = 5, threshold: float = 0.3) -> list[dict]:
+def semantic_search(query: str, top_k: int = 5, threshold: float = 0.3,
+                     category: str = "") -> list[dict]:
     """
     语义检索，返回 [{"chunk": {...}, "score": float}, ...]
+    支持 category 过滤（ChromaDB where 查询）
     """
     if not CHROMA_OK or _collection is None or _collection.count() == 0:
         return []
     try:
         q_embed = _embedder.encode(query).tolist()
         n = min(top_k * 2, max(1, _collection.count()))
+        where_filter = {"category": category} if category else None
         res = _collection.query(
             query_embeddings=[q_embed],
             n_results=n,
+            where=where_filter,
             include=["metadatas", "distances"],
         )
         hits = []
         for meta, dist in zip(res["metadatas"][0], res["distances"][0]):
             score = 1.0 - dist
             if score >= threshold:
-                hits.append({
-                    "chunk": {
-                        "id": "",
-                        "title_path": meta["title_path"],
-                        "content": meta["content"],
-                        "source": meta["source"],
-                        "url": meta.get("url", ""),
-                    },
-                    "score": round(score, 3),
-                })
+                    hits.append({
+                        "chunk": {
+                            "id": "",
+                            "title_path": meta["title_path"],
+                            "content": meta["content"],
+                            "source": meta["source"],
+                            "url": meta.get("url", ""),
+                            "category": meta.get("category", ""),
+                        },
+                        "score": round(score, 3),
+                    })
         return hits[:top_k]
     except Exception as e:
         print(f"[RAG] 语义检索失败: {e}")
@@ -153,15 +159,26 @@ def semantic_search(query: str, top_k: int = 5, threshold: float = 0.3) -> list[
 
 # ── 统一检索入口 ─────────────────────────────────────────
 
-def search_docs(query: str, chunks: list[dict], top_k: int = 5) -> list[dict]:
+def search_docs(query: str, chunks: list[dict], top_k: int = 5,
+                category: str = "") -> list[dict]:
     """
     优先语义检索，降级关键词。
+    支持 category 过滤（ChromaDB where 查询 + TF-IDF 预过滤）
     返回 [{"chunk": {...}, "score": float, "method": "semantic"|"keyword"}, ...]
     """
     if CHROMA_OK:
-        hits = semantic_search(query, top_k=top_k, threshold=0.3)
+        hits = semantic_search(query, top_k=top_k, threshold=0.3, category=category)
         if hits:
             return [dict(h, method="semantic") for h in hits]
+
+    # TF-IDF 降级：先按 category 预过滤 chunks
+    if category:
+        filtered = [c for c in chunks if c.get("category", "") == category]
+        if filtered:
+            chunks = filtered
+        # category 不匹配任何 chunk 时不降级到全量，返回空
+        else:
+            return []
 
     hits = keyword_search(query, chunks, top_k=top_k, threshold=0.05)
     return [dict(h, method="keyword") for h in hits]

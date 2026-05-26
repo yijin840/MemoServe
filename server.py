@@ -269,7 +269,10 @@ async def call_ai_api(messages: list = None, question: str = "") -> tuple[str, f
             latency = (time.time() - start) * 1000
 
             if resp.status_code != 200:
-                error_detail = resp.json().get("error", {}).get("message", resp.text)
+                try:
+                    error_detail = resp.json().get("error", {}).get("message", resp.text[:200])
+                except Exception:
+                    error_detail = resp.text[:200]
                 return f"❌ API 错误 ({resp.status_code}): {error_detail}", latency
 
             data = resp.json()
@@ -278,7 +281,11 @@ async def call_ai_api(messages: list = None, question: str = "") -> tuple[str, f
             if config["provider"] == "anthropic":
                 answer = data["content"][0]["text"]
             else:
-                answer = data["choices"][0]["message"]["content"]
+                msg = data["choices"][0]["message"]
+                answer = msg.get("content", "")
+                # Reasoning 模型兼容（glm-5 等）：content 为空时取 reasoning_content
+                if not answer:
+                    answer = msg.get("reasoning_content", "")
 
             return answer, latency
 
@@ -318,7 +325,14 @@ async def api_ask(req: AskRequest):
         )
 
     if intent == "business":
-        result = await biz_handle(req.question)
+        # P2-01: 临时路由到知识库 Agent（biz_agent 完成后切换回来）
+        user_id = req.user_id or req.session_id or "default"
+        result = await _get_agent().chat(
+            question=req.question,
+            user_id=user_id,
+            session_id=req.session_id,
+            call_ai=call_ai_api,
+        )
         return AskResponse(**result)
 
     # 知识库Agent：传入 user_id（用于记忆隔离）和 session_id（用于对话历史）

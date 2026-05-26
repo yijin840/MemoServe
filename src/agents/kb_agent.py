@@ -62,16 +62,16 @@ def normalize_answer(text: str) -> str:
 # ══════════════════════════════════════════
 
 SYSTEM_PROMPT_TEMPLATE = """
-## 核心约束
+## 核心约束（违反即错误）
 
-1. **如果【相关知识库内容】不为空**，请基于内容详细回答
-2. **如果【相关知识库内容】为空**，请告知用户暂无相关信息，并引导其提问 API 相关问题
-3. **禁止编造、推测或补充知识库以外的信息**
+1. **如果【相关知识库内容】不为空且高度相关**，请基于内容详细回答
+2. **如果【相关知识库内容】为空或不相关**，必须明确告知"文档中未提及相关内容"，禁止编造、推测或补充任何知识库以外的信息
+3. **禁止编造（最高优先级）**：不得出现"通常"、"建议"、"可能"等推测性表述。文档没说的就说没说。
 4. **时间戳单位说明（必须遵守）**：
    - HMAC 签名认证中的 timestamp 参数：**毫秒级** UNIX 时间戳（如 1585310160226）
-   - 查询接口的历史时间参数（former_time、latter_time 等）：**秒级** UNIX 时间戳
+   - 查询接口的历史时间参数（from_time、to_time 等）：**秒级** UNIX 时间戳
    - 回答涉及时间戳的问题时，必须先判断场景，明确告知用户单位
-5. **不确定时主动说明，避免误导用户**
+5. **不确定时主动说明"文档未提及"，禁止误导用户**
 
 ## 输出格式规范（必须遵守）
 
@@ -118,7 +118,8 @@ def classify_intent(question: str) -> str:
         return "unknown"
 
     # 3. 业务操作
-    biz_kw = ["我要充值", "我要开卡", "查余额", "帮我冻结", "帮我解冻",
+    biz_kw = ["充值", "开卡", "查余额", "冻结", "解冻",
+              "我要充值", "我要开卡", "帮我冻结", "帮我解冻",
               "recharge", "open card", "freeze", "unfreeze"]
     if any(k in text for k in biz_kw):
         return "business"
@@ -194,51 +195,78 @@ class CustomerServiceAgent:
             session_id = user_id
         conversation_history = conversation_history or []
 
+        # ★ 短业务查询直接追问，跳过 RAG 检索
+        biz_kw_short = ["充值", "开卡", "查余额", "冻结", "解冻"]
+        if any(kw in question for kw in biz_kw_short) and len(question) <= 5:
+            clarify_msg = (
+                f"您想了解关于「{question}」的哪些信息？例如：\n"
+                f"- 如何操作\n- 需要什么条件\n- 多久到账\n\n"
+                f"您具体想了解哪个？"
+            )
+            clarify_msg = normalize_answer(clarify_msg)
+            return {
+                "answer": clarify_msg,
+                "source": "ai",
+                "doc_hits": 0,
+                "confidence": 0.99,
+                "chunks_used": [],
+                "method": "clarify",
+            }
+
         # Step 1+2: 检索记忆和 RAG
         t1 = time.time()
         doc_result = search_docs(question)
         
         # ★ 多主题反问：把相关 chunks 丢给 LLM，让它自己生成问句
         if doc_result.get("clarify") and call_ai:
-            chunks = doc_result.get("chunks_used", [])
-            chunk_texts = []
-            for c in chunks[:5]:
-                title = c.get("title_path", "").split(" > ")[-1]
-                content = c.get("content", "")[:500]
-                chunk_texts.append(f"【{title}】\n{content}")
+            chunks = [c for c in doc_result.get("chunks_used", []) if c.get("score", 0) >= 0.5][:5]
+            if len(chunks) < 2:
+                pass  # 高质量 chunk 不足2个，跳过反问
+            else:
+                chunk_texts = []
+                for c in chunks:
+                    title = c.get("title_path", "").split(" > ")[-1]
+                    content = c.get("content", "")[:500]
+                    chunk_texts.append(f"【{title}】\n{content}")
             
-            prompt = (
+                prompt = (
                 f'用户问了"{question}"。以下是知识库中可能相关的文档内容：\n\n'
                 + "\n\n".join(chunk_texts)
-                + f'\n\n请根据文档内容生成2-3个简短的中文问句，帮助用户确认想了解什么。'
+                + f'\n\n请根据以上文档内容，生成2-3个文档【能够回答】的简短中文问句。'
                   f'要求：'
                   f'1. 每句不超过15个字，直接陈述事情，不要以"您想了解/您想知道/您需要了解"开头；'
                   f'2. 只列出问句，一行一个，不加编号；'
-                  f'3. 即使文档与问题不完全匹配，也基于已有内容生成最可能的问句。'
-            )
-            try:
-                answer, _ = await call_ai(messages=[{"role": "user", "content": prompt}])
-                # 格式化：去编号、去横线，统一用 Markdown 列表
-                raw_lines = [q.strip("- 1234567890. *") for q in answer.strip().split("\n") if q.strip()]
-                # 去重、去空，确保每条末尾有问号
-                questions = []
-                for q in raw_lines:
-                    if q not in questions:
-                        if not q.endswith(("？", "?")):
-                            q += "？"
-                        questions.append(q)
-                clarify_msg = "关于" + question + "，您是想了解以下哪方面？\n\n" + "\n".join(f"- {q}" for q in questions) + "\n\n您具体想了解哪个？"
-                clarify_msg = normalize_answer(clarify_msg)
-                return {
-                    "answer": clarify_msg,
-                    "source": "ai",
-                    "doc_hits": doc_result["doc_hits"],
-                    "confidence": 0.99,
-                    "chunks_used": chunks,
-                    "method": "clarify",
-                }
-            except Exception:
-                pass  # LLM 调用失败，继续走正常 RAG 流程
+                  f'3. 严禁生成文档中完全没有提及的内容；'
+                  f'4. 如果所有chunk都与问题无关，直接输出一个英文句号"."（不含引号），不要输出任何其他文字。'
+                )
+                try:
+                    answer, _ = await call_ai(messages=[{"role": "user", "content": prompt}])
+                    answer = answer.strip()
+                    # LLM 输出"." 表示无相关内容，跳过反问走正常流程
+                    if answer == ".":
+                        pass  # 放过，继续走正常 RAG 流程
+                    else:
+                        # 格式化：去编号、去横线，统一用 Markdown 列表
+                        raw_lines = [q.strip("- 1234567890. *") for q in answer.split("\n") if q.strip()]
+                        # 去重、去空，确保每条末尾有问号
+                        questions = []
+                        for q in raw_lines:
+                            if q not in questions:
+                                if not q.endswith(("？", "?")):
+                                    q += "？"
+                                questions.append(q)
+                        clarify_msg = "关于" + question + "，您是想了解以下哪方面？\n" + "\n".join(f"- {q}" for q in questions) + "\n您具体想了解哪个？"
+                        clarify_msg = normalize_answer(clarify_msg)
+                        return {
+                            "answer": clarify_msg,
+                            "source": "ai",
+                            "doc_hits": doc_result["doc_hits"],
+                            "confidence": 0.99,
+                            "chunks_used": chunks,
+                            "method": "clarify",
+                        }
+                except Exception:
+                    pass  # LLM 调用失败，继续走正常 RAG 流程
         
         try:
             memories = mem_recall(question, user_id, MEM0_TOP_K)

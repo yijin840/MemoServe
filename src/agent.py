@@ -131,6 +131,29 @@ def answer(question: str) -> dict:
     """检索文档，返回命中文档片段"""
     chunks = get_chunks()
 
+    # ★ 推断分类，用于向量检索预过滤
+    _cat_kw = {
+        "Card issuing API 文档": [
+            "KY C", "开卡", "充值", "冻结", "解冻", "信用卡",
+            "银行卡", "激活", "PIN", "授信", "还款", "账单",
+            "card", "issue", "freeze", "unfreeze", "activate",
+        ],
+        "Native MM API Documentation": [
+            "deposit", "exchange", "asset", "MM", "充值卡",
+            "兑换", "币对", "native",
+        ],
+    }
+    question_upper = question.upper()
+    q_no_space = question_upper.replace(' ', '')
+    category = ""
+    for cat, kws in _cat_kw.items():
+        for kw in kws:
+            if kw.upper() in question_upper or kw.upper().replace(' ', '') in q_no_space:
+                category = cat
+                break
+        if category:
+            break
+
     # 关键词增强检索
     import re as _re
     # 短英文术语（如 KYC、API）直接保留，不过滤长度
@@ -153,7 +176,7 @@ def answer(question: str) -> dict:
     elif long_keywords:
         search_query = long_keywords + ' ' + question
 
-    hits = search_docs(search_query, chunks, top_k=10)
+    hits = search_docs(search_query, chunks, top_k=10, category=category)
 
     # KYC 相关问题：强制插入核心 API 块（参数表太大，普通检索排不到）
     q_nospace = question.replace(' ', '')  # 修复 "k y c" 变体
