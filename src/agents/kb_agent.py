@@ -42,6 +42,21 @@ MEM0_TOP_K = 2
 MAX_RAG_CHARS = 3000  # 约 1000-1500 tokens
 REJECT_ANSWER = "抱歉，您的问题不在我的知识范围内，暂时无法回答。如需进一步帮助，请联系人工客服。"
 
+
+def normalize_answer(text: str) -> str:
+    """统一回答格式：压缩多余空行，清理首尾空白"""
+    if not text:
+        return text
+    # 1. 先标准化换行符
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+    # 2. 列表项前的多余空行去掉（\n\n- item → \n- item）
+    text = re.sub(r'\n\n(?=\s*[-*•]\s|\s*\d+\.\s)', '\n', text)
+    # 3. 连续3个及以上换行压缩成2个（保留段落分隔）
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    # 4. 去掉每行末尾空格
+    text = '\n'.join(line.rstrip() for line in text.split('\n'))
+    return text.strip()
+
 # ══════════════════════════════════════════
 # System Prompt
 # ══════════════════════════════════════════
@@ -57,7 +72,15 @@ SYSTEM_PROMPT_TEMPLATE = """
    - 查询接口的历史时间参数（former_time、latter_time 等）：**秒级** UNIX 时间戳
    - 回答涉及时间戳的问题时，必须先判断场景，明确告知用户单位
 5. **不确定时主动说明，避免误导用户**
-7. **用 Markdown 格式输出**
+
+## 输出格式规范（必须遵守）
+
+- **先一句话总结**，再展开细节
+- **参数列表必须用 Markdown 表格**呈现，禁止用纯文本罗列
+- **列表项之间不留空行**（`\n- item1\n- item2`，不要`\n- item1\n\n- item2`）
+- **使用标准 Markdown 标题层级**：`#` 主标题、`##` 副标题，不要用加粗代替标题
+- **描述简洁**，不要重复啰嗦
+- **关键信息前置**：URL、Method 等核心信息放在列表最前面
 {memory_section}
 """
 
@@ -84,7 +107,7 @@ def classify_intent(question: str) -> str:
     """关键词规则意图分类。返回 greeting | knowledge | business | unknown"""
     text = question.lower().strip()
 
-    # 1. 寒暄：短问候直接回
+    # 1. 寒暄
     greeting = ["你好", "您好", "hello", "hi", "嗨", "哈喽", "谢谢", "感谢", "再见", "拜拜", "bye", "ok", "好的"]
     if text in greeting or (len(text) <= 6 and any(text.startswith(g) for g in ["你好", "hi", "hello"])):
         return "greeting"
@@ -100,7 +123,7 @@ def classify_intent(question: str) -> str:
     if any(k in text for k in biz_kw):
         return "business"
 
-    # 4. 默认：知识问答（包含信息提供类，交给 AI 自行判断如何回应）
+    # 4. 默认：知识问答
     return "knowledge"
 
 
@@ -175,19 +198,46 @@ class CustomerServiceAgent:
         t1 = time.time()
         doc_result = search_docs(question)
         
-        # ★ 多主题反问：检索结果跨多个一级主题时，先让用户选择
-        if doc_result.get("clarify"):
-            topics = doc_result.get("clarify_topics", [])
-            options = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(topics))
-            clarify_msg = f"您的问题涉及多个方面，请问您想了解哪个？\n\n{options}\n\n请告诉我序号或直接描述您的需求。"
-            return {
-                "answer": clarify_msg,
-                "source": "clarify",
-                "doc_hits": doc_result["doc_hits"],
-                "confidence": 0.99,
-                "chunks_used": [],
-                "method": "clarify",
-            }
+        # ★ 多主题反问：把相关 chunks 丢给 LLM，让它自己生成问句
+        if doc_result.get("clarify") and call_ai:
+            chunks = doc_result.get("chunks_used", [])
+            chunk_texts = []
+            for c in chunks[:5]:
+                title = c.get("title_path", "").split(" > ")[-1]
+                content = c.get("content", "")[:500]
+                chunk_texts.append(f"【{title}】\n{content}")
+            
+            prompt = (
+                f'用户问了"{question}"。以下是知识库中可能相关的文档内容：\n\n'
+                + "\n\n".join(chunk_texts)
+                + f'\n\n请根据文档内容生成2-3个简短的中文问句，帮助用户确认想了解什么。'
+                  f'只列出问句，一行一个，不加编号。'
+                  f'即使文档与问题不完全匹配，也基于已有内容生成最可能的问句。'
+            )
+            try:
+                answer, _ = await call_ai(messages=[{"role": "user", "content": prompt}])
+                # 格式化：去编号、去横线，统一用 Markdown 列表
+                raw_lines = [q.strip("- 1234567890. *") for q in answer.strip().split("\n") if q.strip()]
+                # 去重、去空，确保每条末尾有问号
+                questions = []
+                for q in raw_lines:
+                    if q not in questions:
+                        if not q.endswith(("？", "?")):
+                            q += "？"
+                        questions.append(q)
+                clarify_msg = "关于" + question + "，您是想了解以下哪方面？\n\n" + "\n".join(f"- {q}" for q in questions) + "\n\n您具体想了解哪个？"
+                clarify_msg = normalize_answer(clarify_msg)
+                return {
+                    "answer": clarify_msg,
+                    "source": "ai",
+                    "doc_hits": doc_result["doc_hits"],
+                    "confidence": 0.99,
+                    "chunks_used": chunks,
+                    "method": "clarify",
+                }
+            except Exception:
+                pass  # LLM 调用失败，继续走正常 RAG 流程
+        
         try:
             memories = mem_recall(question, user_id, MEM0_TOP_K)
         except Exception:
@@ -255,6 +305,7 @@ class CustomerServiceAgent:
 
         # Step 4: 调用 AI（直接传 messages，保留 system/user 角色）
         answer, latency = await call_ai(messages=messages) if call_ai else ("AI未配置", 0)
+        answer = normalize_answer(answer)
         t5 = time.time()
 
         # Step 5: 学习 + 存档

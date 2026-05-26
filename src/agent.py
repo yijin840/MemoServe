@@ -156,7 +156,10 @@ def answer(question: str) -> dict:
     hits = search_docs(search_query, chunks, top_k=10)
 
     # KYC 相关问题：强制插入核心 API 块（参数表太大，普通检索排不到）
-    if re.search(r'KYC', question, re.I) and re.search(r'对接|接口|API|调用|参数|怎么|如何|how|what|步骤|流程|需要|材料|文件|document|require|need', question, re.I):
+    q_nospace = question.replace(' ', '')  # 修复 "k y c" 变体
+    is_kyc = re.search(r'KYC', q_nospace, re.I)
+    has_detail = re.search(r'对接|接口|API|调用|参数|怎么|如何|how|what|步骤|流程|需要|材料|文件|document|require|need', question, re.I)
+    if is_kyc and (has_detail or len(question.strip()) <= 6):  # 短问题（如纯"KYC"）也插入
         for c in chunks:
             if '提交用户 KYC 数据' in c.get('title_path','') and 'customers/accounts' in c.get('content','')[:300]:
                 hits.insert(0, {"chunk": c, "score": 99.0, "method": "keyword"})
@@ -173,27 +176,80 @@ def answer(question: str) -> dict:
     hits = deduped[:10]
 
     # ★ 多主题反问：检索到多个不同主题时，列出选项让用户选择
-    if len(hits) >= 2:
-        # 提取每个命中块的一级主题（title_path 第一段）
-        topics = []
+    # 但具体提问（含明确动作词）应跳过反问，直接回答
+    is_specific = bool(re.search(
+        r'提交|需要|怎么|如何|什么|哪些|步骤|流程|how|what|which|materials|documents|steps|process|submit',
+        question, re.I
+    ))
+    if len(hits) >= 2 and not is_specific:
+        # 1. 遍历命中块，按归一化主题聚类，同时记录每个主题下最深 title_path
+        topics = []           # 原始一级主题名
+        topic_best = {}       # norm → (original_top, deepest_title_path, hit)
         for h in hits[:8]:
             title = h['chunk'].get('title_path', '')
-            # 取第一级标题（按 > 或 / 分割）
-            top = title.split(' > ')[0].split(' / ')[0].strip()
-            if top and top not in topics:
+            top = title.split(' > ')[0].strip()
+            norm = top.lower().replace(' ', '').replace('—', '-')
+            if norm not in topic_best:
+                topic_best[norm] = (top, title, h)
                 topics.append(top)
-                if len(topics) >= 3:
-                    break
+            elif len(title) > len(topic_best[norm][1]):
+                topic_best[norm] = (top, title, h)
+            if len(topics) >= 3:
+                break
         
-        # 2个以上不同的一级主题 → 反问
+        # 2. 两个以上不同主题 → 生成标签后反问
         if len(topics) >= 2:
+            labels = []
+            for top in topics[:3]:
+                norm = top.lower().replace(' ', '').replace('—', '-')
+                deepest = topic_best[norm][1]
+                parts = [p.strip() for p in deepest.split(' > ')[1:] if p.strip()]
+                noise = {'来源', '来源 1', '来源 2', '来源 3', '来源 4', '来源 5'}
+                meaningful = [p for p in parts if p not in noise and not p.isdigit()]
+                
+                if meaningful:
+                    label = " → ".join(meaningful[:2])
+                else:
+                    # 无深层标题：根据一级主题名+内容推断用户想了解什么
+                    content = h['chunk'].get('content', '')[:200].lower()
+                    cleaned_topic = top.replace(" — 搜索导入", "").replace(" API 文档", "").replace(" 文档", "").replace(" ", "").upper().strip()
+                    if any(w in content[:80] for w in ['什么是', '是什么', '简介', '概述', '概念', '定义', '说明']):
+                        label = f"{cleaned_topic}说明"
+                    elif "搜索导入" in top:
+                        label = f"{cleaned_topic}说明"
+                    elif any(w in content[:80] for w in ['步骤', '流程', '方法', '如何', '怎么', '配置', '必须']):
+                        label = f"{cleaned_topic}操作"
+                    elif any(w in content[:80] for w in ['接口', 'api', 'post', 'get', '参数', '提交']):
+                        label = f"{cleaned_topic}接口"
+                    else:
+                        label = cleaned_topic or top
+                # 清理：去后缀，去多余空格，英文大写
+                for suffix in [" — 搜索导入", " API 文档", " 文档"]:
+                    label = label.replace(suffix, "")
+                label = label.replace("  ", " ").strip()
+                if label.replace(' ', '').isascii() and label.replace(' ', '').isalpha():
+                    label = label.replace(' ', '').upper()
+                labels.append(label)
+            
+            # 每个主题挑一个代表 chunk，供 kb_agent 用 LLM 生成问句
+            clarify_chunks = []
+            for t in topics[:3]:
+                norm = t.lower().replace(' ', '').replace('—', '-')
+                if norm in topic_best:
+                    _, title, hit = topic_best[norm]
+                    clarify_chunks.append({
+                        "title_path": title,
+                        "score": hit.get("score", 99),
+                        "content": hit['chunk'].get('content', '')[:300]
+                    })
             return {
                 "doc_hits": len(hits),
                 "confidence": 0.99,
-                "chunks_used": [],
+                "chunks_used": clarify_chunks,
                 "method": "clarify",
                 "clarify": True,
                 "clarify_topics": topics,
+                "clarify_labels": labels,
             }
 
     method = hits[0]["method"] if hits else "none"

@@ -119,7 +119,7 @@
     .md-content a:hover{text-decoration:underline}
     .md-content hr{border:none;border-top:1px solid var(--border);margin:14px 0}
     .md-content ul,.md-content ol{padding-left:22px;margin:6px 0}
-    .md-content li{margin:3px 0;line-height:1.5}
+    .md-content li{margin:0;line-height:1.3}
     .md-content strong{color:var(--text);font-weight:600}
     .md-content table{border-collapse:collapse;margin:10px 0;font-size:12px;display:block;overflow-x:auto;max-width:100%}
     .md-content thead{border-bottom:2px solid var(--border)}
@@ -817,6 +817,8 @@ function mdRender(text) {
   // List items
   s = s.replace(/^[•\-\*] (.+)$/gm, '<li>$1</li>');
   s = s.replace(/(<li>.*<\/li>)/gs, '<ul>$1</ul>');
+  // 去掉 li 之间的换行，防止被转成 <br> 导致间距
+  s = s.replace(/<\/li>\n<li>/g, '</li><li>');
   // Double newline → paragraph break
   s = s.replace(/\n\n/g, '</p><p>');
   // Single newline → br
