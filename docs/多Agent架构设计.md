@@ -53,7 +53,7 @@ greeting unknown  business  knowledge
 
 | 意图 | 判定词（中文） | 判定词（英文） | 处理方式 | 代码位置 |
 |------|-------------|-------------|---------|---------|
-| **greeting** | 你好、您好、谢谢、再见、拜拜、hello、hi、嗨、哈喽、bye、ok、好的 | hello、hi、bye、ok | `server.py` 直接返回硬编码 `"您好，有什么可以帮您？"`，不调 AI | `kb_agent.py:88` |
+| **greeting** | 你好、您好、谢谢、再见、拜拜、hello、hi、嗨、哈喽、bye、ok、好的 | hello、hi、bye、ok | `server.py` 直接返回硬编码 `"您好，有什么可以帮您？"`，不调 AI | `kb_agent.py:106` |
 | **unknown** | 天气、比特币、股票、唱歌、讲笑话、预测 | weather、bitcoin、stock、joke、song | `server.py` 直接返回硬编码拒答引导语 | `kb_agent.py:98` |
 | **business** | 我要充值、我要开卡、查余额、帮我冻结、帮我解冻 | recharge、open card、freeze | 路由到 `biz_agent.py`，当前返回占位"功能开发中" | `kb_agent.py:104` `server.py:320` |
 | **knowledge** | 默认（以上均不匹配） | 默认 | 路由到 `kb_agent.py` CustomerServiceAgent，走完整 RAG+mem0+LLM 流程 | `kb_agent.py:110` |
@@ -63,7 +63,7 @@ greeting unknown  business  knowledge
 ### 2.3 函数签名与代码位置
 
 ```python
-# 文件: src/agents/kb_agent.py (第 85-110 行)
+# 文件: src/agents/kb_agent.py (第 106-128 行)
 # 调用位置: server.py (第 303 行)
 def classify_intent(question: str) -> str:
     """返回: "greeting" | "unknown" | "business" | "knowledge" """
@@ -72,7 +72,7 @@ def classify_intent(question: str) -> str:
 ### 2.4 server.py 路由逻辑
 
 ```python
-# server.py 第 306-338 行
+# server.py 第 306-332 行
 intent = classify_intent(req.question)
 
 if intent == "greeting":
@@ -235,7 +235,7 @@ server.py  POST /api/ask
 
 ---
 
-## 六、多主题反问（P1-04 · 已实现）
+## 六、多主题反问（P1-04 · 已实现 ✅）
 
 ### 6.1 问题描述
 
@@ -258,9 +258,9 @@ server.py  POST /api/ask
 
 ### 6.2 设计原则
 
-1. **零额外成本**：检测逻辑在检索阶段完成，不额外调 AI，毫秒级完成
-2. **关键词规则，不调 LLM**：和 `classify_intent()` 同样思路——分类数少（2-3 个一级主题）、规则明确（title_path 第一段），不需要让 AI 来判断"是不是同一个主题"
-3. **反问即回答**：检测到多主题 ≠ 报错，而是生成一次反问，这次反问本身就是对用户的有效回应
+1. **LLM 生成反问内容**：检测到多主题后，将相关 chunks 交给 LLM，让它基于知识库内容生成自然问句（零硬编码模板）
+2. **具体提问跳过反问**：含动作词（提交/需要/怎么/如何）时直接回答，不反问
+3. **格式统一**：反问内容用 Markdown 列表格式，与正常回答格式一致
 4. **不破坏现有流程**：反问结果和正常回答使用相同的 `AskResponse` 结构，前端无需任何改动
 
 ### 6.3 Agent 分工与协作流程
@@ -288,9 +288,10 @@ kb_agent.chat()
   │      返回 { "clarify": True, "clarify_topics": [...] }
   │
   ├─ [3] 判断 clarify == True？
-  │      ├─ 是 → 跳过步骤 4/5/6，直接构建反问文本
+  │      ├─ 是 → 将 chunks 交给 LLM 生成自然问句
+  │      │      prompt: "用户问了{question}。以下是知识库内容...请根据文档内容生成2-3个简短的中文问句"
+  │      │      格式化：去编号、去横线、Markdown 列表、补问号
   │      │      返回 AskResponse(answer=反问, method="clarify")
-  │      │      ⚠️ LLM 完全未参与
   │      │
   │      └─ 否 → 继续正常流程
   │              [4] 预算控制 + 上下文构建
@@ -305,12 +306,12 @@ kb_agent.chat()
 | 模块 | 职责 | 是否涉及 LLM | 依赖 |
 |------|------|------------|------|
 | `src/agent.py` answer() | 检索 + KYC提权 + 去重 + 多主题检测 | ❌ 不涉及 | `src/doc_loader.py`（加载块）`src/rag_store.py`（TF-IDF/ChromaDB） |
-| `src/agents/kb_agent.py` chat() | 接收 clarify 标记 → 构建反问文本 → 返回 | ❌ 不涉及 | `src/agent.py`（只调 answer() 看返回值） |
+| `src/agents/kb_agent.py` chat() | 接收 clarify 标记 → 调 LLM 生成问句 → 格式化返回 | ✅ 反问时调用 | `src/agent.py`（只调 answer() 看返回值） |
 | `server.py` call_ai_api() | 多主题反问走不到这步 | ✅ 但反问不会触发 | DeepSeek API / OpenAI 兼容接口 |
 
-**LLM 在反问流程中的作用：零。**
+**LLM 在反问流程中的作用：生成反问问句。**
 
-反问发生在步骤 3（检索后），如果 `clarify == True`，步骤 4/5/6 全部跳过，LLM 从头到尾不被调用。这是本功能最核心的设计决定——用一行的关键词规则（`split(' > ')`）替代一次完整的 RAG+LLM 调用，节省约 2-3 秒延迟和 1000-2000 tokens。
+检测到多主题后，`kb_agent.py` 将相关 chunks 交给 LLM，prompt 要求生成 2-3 个简短中文问句，再格式化为 Markdown 列表。LLM 调用在 `kb_agent.py` 第 210-240 行，失败时降级走正常 RAG 流程。
 
 **反问的依赖链路**：
 
@@ -350,7 +351,7 @@ KYC — 搜索导入 > 来源 3                          ← 一级主题 = "KYC
 
 ### 6.5 实现细节
 
-**步骤 1：检索 + 去重后，提取一级主题（`src/agent.py` 第 175-197 行）**
+**步骤 1：检索 + 去重后，提取一级主题（`src/agent.py` 第 170-265 行）**
 
 ```python
 # 去重后的 hits 列表（同标题只保留最高分）
@@ -380,32 +381,60 @@ if len(topics) >= 2:
 
 **为什么设早停（topics ≥ 3）？** 反问最多列出 3 个选项，遍历到第 3 个就可以停了。
 
-**步骤 2：`kb_agent.py` 处理反问（第 178-197 行）**
+**步骤 2：`kb_agent.py` 处理反问（第 210-240 行）**
 
 ```python
 doc_result = search_docs(question)
 
-# 多主题反问：检索结果跨多个一级主题 → 先反问
-if doc_result.get("clarify"):
-    topics = doc_result.get("clarify_topics", [])
-    options = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(topics))
-    return {
-        "answer": f"您的问题涉及多个方面，请问您想了解哪个？\n\n{options}\n\n请告诉我序号或直接描述您的需求。",
-        "source": "clarify",
-        "doc_hits": doc_result["doc_hits"],
-        "confidence": 0.99,
-        "chunks_used": [],
-        "method": "clarify",
-    }
+# 多主题反问：把相关 chunks 丢给 LLM，让它自己生成问句
+if doc_result.get("clarify") and call_ai:
+    chunks = doc_result.get("chunks_used", [])
+    chunk_texts = []
+    for c in chunks[:5]:
+        title = c.get("title_path", "").split(" > ")[-1]
+        content = c.get("content", "")[:500]
+        chunk_texts.append(f"【{title}】\n{content}")
+    
+    prompt = (
+        f'用户问了"{question}"。以下是知识库中可能相关的文档内容：\n\n'
+        + "\n\n".join(chunk_texts)
+        + f'\n\n请根据文档内容生成2-3个简短的中文问句，帮助用户确认想了解什么。'
+          f'只列出问句，一行一个，不加编号。'
+          f'即使文档与问题不完全匹配，也基于已有内容生成最可能的问句。'
+    )
+    try:
+        answer, _ = await call_ai(messages=[{"role": "user", "content": prompt}])
+        # 格式化：去编号、去横线，统一用 Markdown 列表
+        raw_lines = [q.strip("- 1234567890. *") for q in answer.strip().split("\n") if q.strip()]
+        # 去重、去空，确保每条末尾有问号
+        questions = []
+        for q in raw_lines:
+            if q not in questions:
+                if not q.endswith(("？", "?")):
+                    q += "？"
+                questions.append(q)
+        clarify_msg = "关于" + question + "，您是想了解以下哪方面？\n\n" + "\n".join(f"- {q}" for q in questions) + "\n\n您具体想了解哪个？"
+        clarify_msg = normalize_answer(clarify_msg)
+        return {
+            "answer": clarify_msg,
+            "source": "ai",
+            "doc_hits": doc_result["doc_hits"],
+            "confidence": 0.99,
+            "chunks_used": chunks,
+            "method": "clarify",
+        }
+    except Exception:
+        pass  # LLM 调用失败，继续走正常 RAG 流程
 ```
 
 **关键设计点**：
 
-1. **不调 AI**：反问是服务端硬编码文本，零延迟、零 token 消耗
-2. **置信度 0.99**：反问不是"不确定"，而是"确定需要用户选择"
-3. **source="clarify"**：前端可以据此做特殊渲染（如选项卡片样式）
-4. **chunks_used 为空**：反问不需要展示来源（选项本身就是来源）
-5. **返回后终止流程**：不再进入步骤 4-6（上下文构建、AI 调用、学习归档）
+1. **LLM 生成反问内容**：反问内容由 LLM 基于知识库 chunk 实时生成，零硬编码模板
+2. **去重、去空、补问号**：确保问句不重复、末尾有问号
+3. **Markdown 列表格式**：反问选项用 `- 问句？` 格式，与正常回答格式一致
+4. **normalize_answer()**：统一压缩多余空行，确保格式紧凑
+5. **LLM 调用失败时降级**：`except Exception: pass` 继续走正常 RAG 流程，不中断服务
+6. **返回后终止流程**：不再进入步骤 4-6（上下文构建、AI 调用、学习归档）
 
 ### 6.6 效果对比
 
@@ -421,11 +450,13 @@ if doc_result.get("clarify"):
 **修复后（反问）**：
 ```
 用户：KYC
-系统：您的问题涉及多个方面，请问您想了解哪个？
-       1. KYC — 搜索导入
-       2. Card issuing API 文档
-      请告诉我序号或直接描述您的需求。
-      （零 AI 调用，用户可以选择精确方向）
+系统：关于KYC，您是想了解以下哪方面？
+      - 如何提交用户KYC数据？
+      - KYC审核失败后如何重新提交？
+      - 什么是Central KYC？
+      
+      您具体想了解哪个？
+      （LLM 基于知识库生成，零硬编码，格式统一Markdown列表）
 ```
 
 ### 6.7 上下文预算控制
