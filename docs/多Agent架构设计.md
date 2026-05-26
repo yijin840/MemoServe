@@ -263,7 +263,68 @@ server.py  POST /api/ask
 3. **反问即回答**：检测到多主题 ≠ 报错，而是生成一次反问，这次反问本身就是对用户的有效回应
 4. **不破坏现有流程**：反问结果和正常回答使用相同的 `AskResponse` 结构，前端无需任何改动
 
-### 6.3 方案设计
+### 6.3 Agent 分工与协作流程
+
+**参与模块**：知识库 Agent（`src/agents/kb_agent.py`）的 `CustomerServiceAgent.chat()` 方法 + 检索层（`src/agent.py`）的 `answer()` 函数。不涉及业务 Agent 和主 Agent（意图分类在本功能之前已完成）。
+
+**协作时序**：
+
+```
+用户「KYC」
+  │
+  │  [1] server.py 意图分类 → "knowledge"
+  │      主Agent完成路由，后续全由知识库Agent处理
+  ▼
+kb_agent.chat()
+  │
+  ├─ [2] search_docs(question)
+  │      调用 src/agent.py 的 answer() 函数
+  │      answer() 内部执行：
+  │        ├─ get_chunks()         ← src/doc_loader.py (加载115块)
+  │        ├─ search_docs()        ← src/rag_store.py (TF-IDF + ChromaDB 检索)
+  │        ├─ KYC 硬规则提权       ← 检测 KYC 关键词，强制插入核心接口块
+  │        ├─ 标题去重             ← 同标题只保留最高分
+  │        └─ ★ 多主题检测         ← 提取 title_path 一级主题，≥2 则标记 clarify
+  │      返回 { "clarify": True, "clarify_topics": [...] }
+  │
+  ├─ [3] 判断 clarify == True？
+  │      ├─ 是 → 跳过步骤 4/5/6，直接构建反问文本
+  │      │      返回 AskResponse(answer=反问, method="clarify")
+  │      │      ⚠️ LLM 完全未参与
+  │      │
+  │      └─ 否 → 继续正常流程
+  │              [4] 预算控制 + 上下文构建
+  │              [5] call_ai_api() → LLM 生成回答     ← LLM 只在这步参与
+  │              [6] learn() + mem_remember()
+  │
+  └─ 返回 AskResponse
+```
+
+**各模块职责**：
+
+| 模块 | 职责 | 是否涉及 LLM | 依赖 |
+|------|------|------------|------|
+| `src/agent.py` answer() | 检索 + KYC提权 + 去重 + 多主题检测 | ❌ 不涉及 | `src/doc_loader.py`（加载块）`src/rag_store.py`（TF-IDF/ChromaDB） |
+| `src/agents/kb_agent.py` chat() | 接收 clarify 标记 → 构建反问文本 → 返回 | ❌ 不涉及 | `src/agent.py`（只调 answer() 看返回值） |
+| `server.py` call_ai_api() | 多主题反问走不到这步 | ✅ 但反问不会触发 | DeepSeek API / OpenAI 兼容接口 |
+
+**LLM 在反问流程中的作用：零。**
+
+反问发生在步骤 3（检索后），如果 `clarify == True`，步骤 4/5/6 全部跳过，LLM 从头到尾不被调用。这是本功能最核心的设计决定——用一行的关键词规则（`split(' > ')`）替代一次完整的 RAG+LLM 调用，节省约 2-3 秒延迟和 1000-2000 tokens。
+
+**反问的依赖链路**：
+
+```
+用户提问
+  → server.py (classify_intent)          依赖: src/agents/kb_agent.py
+  → kb_agent.chat()                       依赖: src/agent.py, src/mem0_manager.py, server.py(call_ai_api)
+  → agent.answer()                        依赖: src/doc_loader.py, src/rag_store.py
+  → rag_store.search_docs()              依赖: chromadb (可选), scikit-learn (TF-IDF)
+  → 多主题检测 (tags提取)                 依赖: title_path 字段 (来自 doc_loader.py 切块时自动生成)
+  → 反问文本组装 (kb_agent.chat())        依赖: 无外部依赖，纯字符串拼接
+```
+
+### 6.4 方案设计
 
 **核心思路**：利用文档的 `title_path` 层级结构做主题聚类。
 
@@ -287,7 +348,7 @@ KYC — 搜索导入 > 来源 3                          ← 一级主题 = "KYC
 - 前 8 个已经足够代表性，后 2 个通常是低分噪声
 - 减少变量，避免边缘情况（如第 10 个块偶然命中一个生僻主题就触发反问）
 
-### 6.4 实现细节
+### 6.5 实现细节
 
 **步骤 1：检索 + 去重后，提取一级主题（`src/agent.py` 第 175-197 行）**
 
@@ -346,7 +407,7 @@ if doc_result.get("clarify"):
 4. **chunks_used 为空**：反问不需要展示来源（选项本身就是来源）
 5. **返回后终止流程**：不再进入步骤 4-6（上下文构建、AI 调用、学习归档）
 
-### 6.5 效果对比
+### 6.6 效果对比
 
 **修复前（直接调 AI）**：
 ```
@@ -367,7 +428,7 @@ if doc_result.get("clarify"):
       （零 AI 调用，用户可以选择精确方向）
 ```
 
-### 6.6 上下文预算控制
+### 6.7 上下文预算控制
 
 检索反问和 AI 生成共享同一套 RAG 上下文预算保护。无论原始文档多大，传入 LLM 的 RAG 上下文始终受三层限制：
 
